@@ -1,0 +1,18 @@
+{
+  "airline": "United",
+  "url": "https://www.unitedwifi.com/portal/r/getAllSessionData",
+  "fields": {
+    "flightNumber": "flifo.flightNumber",
+    "origin": "flifo.originAirportCode",
+    "destination": "flifo.destinationAirportCode",
+    "altitudeFt": "flifo.altitudeFt",
+    "groundSpeedMPH": "flifo.groundSpeedMPH",
+    "airTempF": "flifo.airTemperatureF",
+    "onGround": "flifo.onGround",
+    "aircraftModel": "flifo.aircraftModel",
+    "flightStatus": "flifo.flightStatus",
+    "scheduledDepartureTimeLocal": "flifo.scheduledDepartureTimeLocal",
+    "scheduledArrivalTimeLocal": "flifo.scheduledArrivalTimeLocal",
+    "timeRemainingMinutes": "flifo.timeRemainingToDestination"
+  }
+}

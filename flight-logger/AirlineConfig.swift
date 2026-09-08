@@ -17,23 +17,32 @@ struct AirlineConfig: Codable, Identifiable {
     let url: String
     let fields: FieldMappings
 
+    /// Every member defaults to nil, so a config maps only what its provider
+    /// offers and adding a new field here does not break existing call sites —
+    /// which it did once, across every test, before the defaults existed.
+    ///
+    /// These are `var`, not `let`, and that is load-bearing: a `let` with a
+    /// default is a constant, which Swift omits from both the memberwise
+    /// initializer *and* Decodable synthesis. Declared as `let ... = nil` every
+    /// field would silently decode as nil and every airline config would stop
+    /// working — invisibly, until someone was airborne.
     struct FieldMappings: Codable {
         // All optional: providers expose very different subsets. Panasonic's
         // feed carries altitude and speed but no flight number or on-ground
         // flag, and requiring those would make it impossible to describe.
-        let flightNumber: String?
-        let origin: String?
-        let destination: String?
-        let altitudeFt: String?
-        let groundSpeedMPH: String?
-        let airTempF: String?
-        let onGround: String?
+        var flightNumber: String? = nil
+        var origin: String? = nil
+        var destination: String? = nil
+        var altitudeFt: String? = nil
+        var groundSpeedMPH: String? = nil
+        var airTempF: String? = nil
+        var onGround: String? = nil
 
-        let aircraftModel: String?
-        let flightStatus: String?
-        let scheduledDepartureTimeLocal: String?
-        let scheduledArrivalTimeLocal: String?
-        let timeRemainingMinutes: String?
+        var aircraftModel: String? = nil
+        var flightStatus: String? = nil
+        var scheduledDepartureTimeLocal: String? = nil
+        var scheduledArrivalTimeLocal: String? = nil
+        var timeRemainingMinutes: String? = nil
 
         // Units the *provider* uses. The app stores feet, MPH and Fahrenheit
         // throughout, so anything else is converted on the way in.
@@ -41,9 +50,23 @@ struct AirlineConfig: Codable, Identifiable {
         // This is not optional polish: Panasonic reports ground speed in knots
         // and UGO in km/h, so treating a provider's number as MPH because the
         // field is named that way would record speeds wrong by 15-60%.
-        let altitudeUnit: String?
-        let speedUnit: String?
-        let temperatureUnit: String?
+        var altitudeUnit: String? = nil
+        var speedUnit: String? = nil
+        var temperatureUnit: String? = nil
+
+        // Static metadata. Recorded once and never recoverable afterwards, so
+        // it is worth mapping even where nothing displays it yet.
+        var originCity: String? = nil
+        var destinationCity: String? = nil
+        var originICAO: String? = nil
+        var destinationICAO: String? = nil
+        var departureGate: String? = nil
+        var departureTerminal: String? = nil
+        var arrivalGate: String? = nil
+        var arrivalTerminal: String? = nil
+        var tailNumber: String? = nil
+        var equipmentCode: String? = nil
+        var scheduledDurationMinutes: String? = nil
 
         /// Substrings of `flightStatus` that mean the aircraft is down.
         ///
@@ -52,7 +75,7 @@ struct AirlineConfig: Codable, Identifiable {
         /// in `bogo/1K`). Text status is the only signal it offers, so this
         /// lets a config express that without special-casing an airline in
         /// code. Matched case-insensitively as a substring.
-        let onGroundStatusValues: [String]?
+        var onGroundStatusValues: [String]? = nil
     }
 }
 
@@ -93,6 +116,12 @@ enum AirlineConfigLoader {
                 altitudeUnit: nil,
                 speedUnit: nil,
                 temperatureUnit: nil,
+                originCity: nil, destinationCity: nil,
+                originICAO: nil, destinationICAO: nil,
+                departureGate: nil, departureTerminal: nil,
+                arrivalGate: nil, arrivalTerminal: nil,
+                tailNumber: nil, equipmentCode: nil,
+                scheduledDurationMinutes: nil,
                 onGroundStatusValues: nil
             )
         )

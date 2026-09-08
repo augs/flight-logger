@@ -35,6 +35,19 @@ enum AirlineResponseParser {
 
         var onGround: Bool?
 
+        // Static metadata — captured once, unrecoverable after landing.
+        var originCity: String?
+        var destinationCity: String?
+        var originICAO: String?
+        var destinationICAO: String?
+        var departureGate: String?
+        var departureTerminal: String?
+        var arrivalGate: String?
+        var arrivalTerminal: String?
+        var tailNumber: String?
+        var equipmentCode: String?
+        var scheduledDurationMinutes: Double?
+
         /// True when nothing at all could be extracted — usually a sign the
         /// config's paths don't match this portal's shape.
         var isEmpty: Bool {
@@ -87,7 +100,18 @@ enum AirlineResponseParser {
             airTempF: double(json, fields.airTempF)
                 .map { temperatureInFahrenheit($0, unit: fields.temperatureUnit) },
             timeRemainingMinutes: double(json, fields.timeRemainingMinutes),
-            onGround: onGround(json, fields)
+            onGround: onGround(json, fields),
+            originCity: string(json, fields.originCity),
+            destinationCity: string(json, fields.destinationCity),
+            originICAO: string(json, fields.originICAO),
+            destinationICAO: string(json, fields.destinationICAO),
+            departureGate: string(json, fields.departureGate),
+            departureTerminal: string(json, fields.departureTerminal),
+            arrivalGate: string(json, fields.arrivalGate),
+            arrivalTerminal: string(json, fields.arrivalTerminal),
+            tailNumber: string(json, fields.tailNumber),
+            equipmentCode: string(json, fields.equipmentCode),
+            scheduledDurationMinutes: double(json, fields.scheduledDurationMinutes)
         )
     }
 

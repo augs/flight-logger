@@ -10,6 +10,7 @@
     "onGround": "weightOnWheels",
     "aircraftModel": "aircraftType",
     "flightStatus": "flightPhase",
-    "speedUnit": "knots"
+    "speedUnit": "knots",
+    "tailNumber": "aircraftRegistration"
   }
 }

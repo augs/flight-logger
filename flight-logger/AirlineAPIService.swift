@@ -222,6 +222,11 @@ final class AirlineAPIService {
             // Auto-populate session metadata on first successful poll
             if !hasPopulatedMetadata {
                 populateMetadata(reading, session: flightSession)
+                flightSession.apiProvider = config.airline
+                // Keep the payload verbatim. Anything not mapped above is
+                // otherwise lost the moment the flight lands, and this turns a
+                // real flight into a fixture for the parser tests.
+                flightSession.rawFirstResponse = String(data: data, encoding: .utf8) ?? ""
                 hasPopulatedMetadata = true
             }
 
@@ -281,5 +286,27 @@ final class AirlineAPIService {
         if let model = reading.aircraftModel, session.aircraftModel.isEmpty {
             session.aircraftModel = model
         }
+
+        // Static metadata. Same fill-blanks-only rule, so a value the user
+        // typed or an earlier poll established is never overwritten.
+        fill(&session.originCity, reading.originCity)
+        fill(&session.destinationCity, reading.destinationCity)
+        fill(&session.originICAO, reading.originICAO)
+        fill(&session.destinationICAO, reading.destinationICAO)
+        fill(&session.departureGate, reading.departureGate)
+        fill(&session.departureTerminal, reading.departureTerminal)
+        fill(&session.arrivalGate, reading.arrivalGate)
+        fill(&session.arrivalTerminal, reading.arrivalTerminal)
+        fill(&session.tailNumber, reading.tailNumber)
+        fill(&session.equipmentCode, reading.equipmentCode)
+
+        if session.scheduledDurationMinutes == 0, let minutes = reading.scheduledDurationMinutes {
+            session.scheduledDurationMinutes = Int(minutes)
+        }
+    }
+
+    private func fill(_ target: inout String, _ value: String?) {
+        guard target.isEmpty, let value, !value.isEmpty else { return }
+        target = value
     }
 }

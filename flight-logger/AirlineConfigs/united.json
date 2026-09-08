@@ -13,6 +13,20 @@
     "scheduledDepartureTimeLocal": "flifo.scheduledDepartureTimeLocal",
     "scheduledArrivalTimeLocal": "flifo.scheduledArrivalTimeLocal",
     "timeRemainingMinutes": "flifo.timeRemainingToDestination",
-    "onGroundStatusValues": ["arrived", "landed", "at gate", "on ground"]
+    "onGroundStatusValues": [
+      "arrived",
+      "landed",
+      "at gate",
+      "on ground"
+    ],
+    "originCity": "flifo.originCity",
+    "destinationCity": "flifo.destinationCity",
+    "departureGate": "flifo.departureGate",
+    "departureTerminal": "flifo.departureTerminal",
+    "arrivalGate": "flifo.arrivalGate",
+    "arrivalTerminal": "flifo.arrivalTerminal",
+    "tailNumber": "flifo.tailNumber",
+    "equipmentCode": "flifo.equipmentCode",
+    "scheduledDurationMinutes": "flifo.flightDurationMinutes"
   }
 }

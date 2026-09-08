@@ -23,6 +23,46 @@ final class FlightSession {
     /// "api-auto" or "manual"
     var recordingMode: String
 
+    // MARK: - Static flight metadata
+    //
+    // Captured once, on the first successful poll. These are only available
+    // while airborne and cannot be recovered afterwards, so anything the
+    // portal offers is worth storing even if nothing displays it yet.
+    // Property-level defaults keep lightweight migration working.
+
+    var originCity: String = ""
+    var destinationCity: String = ""
+    /// ICAO codes, where the provider gives them alongside IATA.
+    var originICAO: String = ""
+    var destinationICAO: String = ""
+
+    var departureGate: String = ""
+    var departureTerminal: String = ""
+    var arrivalGate: String = ""
+    var arrivalTerminal: String = ""
+
+    /// Aircraft registration (tail number), distinct from the model.
+    var tailNumber: String = ""
+    /// Fleet/equipment type code, distinct from the marketing model name.
+    var equipmentCode: String = ""
+
+    /// Scheduled duration in minutes, as the airline reports it.
+    var scheduledDurationMinutes: Int = 0
+
+    /// The provider's own name for itself, e.g. "Panasonic Avionics".
+    var apiProvider: String = ""
+
+    /// Verbatim first successful API response.
+    ///
+    /// The backstop for everything this model does not have a column for. These
+    /// APIs are unreachable on the ground, so a field we failed to anticipate is
+    /// lost for good once the flight lands — unless the raw payload was kept.
+    /// It also turns every real flight into a fixture for the parser tests,
+    /// which is the only way to build genuine airline coverage.
+    ///
+    /// Stays on device like everything else; exported only if the user asks.
+    var rawFirstResponse: String = ""
+
     @Relationship(deleteRule: .cascade, inverse: \SensorReading.session)
     var sensorReadings: [SensorReading] = []
 

@@ -989,3 +989,62 @@ struct UnitedOnGroundTests {
         #expect(AirlineResponseParser.parse(json: json, fields: fields).onGround == false)
     }
 }
+
+// MARK: - Config decoding actually works
+
+/// Guards a trap hit while adding default values: declaring the mappings as
+/// `let x: String? = nil` makes each one a *constant*, which Swift omits from
+/// both the memberwise initializer and Decodable synthesis. Every field would
+/// then decode as nil and every airline config would silently stop working —
+/// invisible on the ground, discovered only mid-flight. Building successfully
+/// proves nothing here; only decoding does.
+struct ConfigDecodingTests {
+
+    @Test func fieldsSurviveDecodingRatherThanDefaultingToNil() throws {
+        let json = """
+        {"airline":"Test","url":"https://example.com/api",
+         "fields":{"flightNumber":"a.b","altitudeFt":"c.d","onGroundStatusValues":["landed"],
+                   "speedUnit":"knots","departureGate":"e.f"}}
+        """
+        let config = try JSONDecoder().decode(AirlineConfig.self, from: Data(json.utf8))
+
+        #expect(config.airline == "Test")
+        #expect(config.fields.flightNumber == "a.b")
+        #expect(config.fields.altitudeFt == "c.d")
+        #expect(config.fields.speedUnit == "knots")
+        #expect(config.fields.departureGate == "e.f")
+        #expect(config.fields.onGroundStatusValues == ["landed"])
+        // Unmapped keys stay nil, which is the point of the defaults.
+        #expect(config.fields.arrivalGate == nil)
+    }
+
+    /// Each bundled config must decode with its key fields intact, not merely
+    /// parse as JSON.
+    @Test func bundledConfigsDecodeWithUsableMappings() throws {
+        let directory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "flight-logger/AirlineConfigs")
+
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
+
+        for file in files {
+            let config = try JSONDecoder().decode(AirlineConfig.self, from: try Data(contentsOf: file))
+            let name = file.lastPathComponent
+
+            // Every provider we ship is here for altitude at minimum; a config
+            // that maps nothing would probe a URL and record no data.
+            #expect(config.fields.altitudeFt != nil, "\(name) maps no altitude")
+
+            // Landing must be detectable somehow, or auto-stop can never fire
+            // for that airline and the 2h backstop is the only exit.
+            let landingDetectable = config.fields.onGround != nil
+                || (config.fields.onGroundStatusValues?.isEmpty == false && config.fields.flightStatus != nil)
+            if !landingDetectable {
+                // Position-only feeds genuinely cannot; assert that is why.
+                #expect(config.fields.flightNumber == nil,
+                        "\(name) has flight data but no way to detect landing")
+            }
+        }
+    }
+}

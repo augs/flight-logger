@@ -47,6 +47,29 @@ struct FlightDetailView: View {
             if !session.aircraftModel.isEmpty {
                 LabeledContent("Aircraft", value: session.aircraftModel)
             }
+            if !session.tailNumber.isEmpty {
+                LabeledContent("Registration", value: session.tailNumber)
+            }
+            if !session.equipmentCode.isEmpty {
+                LabeledContent("Equipment", value: session.equipmentCode)
+            }
+            if !session.departureGate.isEmpty || !session.departureTerminal.isEmpty {
+                LabeledContent("Departure gate",
+                               value: [session.departureTerminal, session.departureGate]
+                                   .filter { !$0.isEmpty }.joined(separator: " · "))
+            }
+            if !session.arrivalGate.isEmpty || !session.arrivalTerminal.isEmpty {
+                LabeledContent("Arrival gate",
+                               value: [session.arrivalTerminal, session.arrivalGate]
+                                   .filter { !$0.isEmpty }.joined(separator: " · "))
+            }
+            if !session.originCity.isEmpty || !session.destinationCity.isEmpty {
+                LabeledContent("Cities",
+                               value: "\(session.originCity) → \(session.destinationCity)")
+            }
+            if !session.apiProvider.isEmpty {
+                LabeledContent("Data source", value: session.apiProvider)
+            }
             LabeledContent("Started", value: session.recordingStartedAt.formatted(date: .abbreviated, time: .shortened))
             if let ended = session.recordingEndedAt {
                 LabeledContent("Ended", value: ended.formatted(date: .abbreviated, time: .shortened))

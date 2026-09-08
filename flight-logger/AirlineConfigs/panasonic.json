@@ -9,10 +9,12 @@
     "groundSpeedMPH": "ground_speed_knots",
     "airTempF": "outside_air_temp_celsius",
     "onGround": "weight_on_wheels",
-    "aircraftModel": "tail_number",
     "flightStatus": "flight_phase",
     "timeRemainingMinutes": "time_to_destination_minutes",
     "speedUnit": "knots",
-    "temperatureUnit": "celsius"
+    "temperatureUnit": "celsius",
+    "originICAO": "departure_icao",
+    "destinationICAO": "destination_icao",
+    "tailNumber": "tail_number"
   }
 }

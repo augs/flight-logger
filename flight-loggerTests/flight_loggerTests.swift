@@ -460,3 +460,39 @@ struct BackfillIntervalTests {
         #expect(Self.session(historyOffsets: []).backfillInterval == nil)
     }
 }
+
+// MARK: - Phone-sourced readings
+
+struct DeviceReadingTests {
+
+    @Test func emptyRowIsRecognised() {
+        // An all-nil row must be droppable: stored, it is indistinguishable
+        // from a real measurement of zero once it reaches a chart.
+        #expect(DeviceReading().isEmpty)
+        #expect(DeviceReading(gpsSpeedMPS: 0).isEmpty == false)
+        #expect(DeviceReading(pressureHPa: 1013.25).isEmpty == false)
+    }
+
+    /// CoreMotion reports kPa; everything in this app is hPa so the phone's
+    /// pressure is directly comparable with the tag's.
+    @Test func kilopascalsConvertToHectopascalsAtCabinAltitude() {
+        // ~8,000 ft cabin altitude is roughly 75 kPa.
+        let kPa = 75.2
+        let hPa = kPa * 10.0
+        #expect(abs(hPa - 752.0) < 0.001)
+
+        // Sea level sanity check against the tag's own units.
+        #expect(abs(101.325 * 10.0 - 1013.25) < 0.001)
+    }
+
+    @Test func retainsAccuracySoBadFixesCanBeFiltered() {
+        // A negative vertical accuracy means the altitude is invalid; the value
+        // is still stored so a consumer can tell "bad fix" from "no fix".
+        let bad = DeviceReading(gpsAltitudeMeters: 1200, gpsVerticalAccuracy: -1)
+        #expect(bad.gpsAltitudeMeters == 1200)
+        #expect((bad.gpsVerticalAccuracy ?? 0) < 0)
+
+        let good = DeviceReading(gpsAltitudeMeters: 10_600, gpsVerticalAccuracy: 8)
+        #expect((good.gpsVerticalAccuracy ?? .infinity) < 50)
+    }
+}

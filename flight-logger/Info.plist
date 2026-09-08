@@ -7,6 +7,8 @@
 		<string>bluetooth-central</string>
 		<string>location</string>
 	</array>
+	<key>NSMotionUsageDescription</key>
+	<string>Reads the barometer to record cabin pressure during a flight, as a second source alongside your RuuviTag.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Keeps the flight recording running while your screen is off, so cabin sensor and flight data are logged for the whole flight.</string>
 </dict>

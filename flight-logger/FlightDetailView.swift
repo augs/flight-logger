@@ -21,7 +21,8 @@ struct FlightDetailView: View {
         ScrollView {
             VStack(spacing: 20) {
                 metadataSection
-                if !session.sensorReadings.isEmpty || !session.flightDataPoints.isEmpty {
+                if !session.sensorReadings.isEmpty || !session.flightDataPoints.isEmpty
+                    || !session.deviceReadings.isEmpty {
                     chartSection
                 }
             }
@@ -90,6 +91,7 @@ struct FlightDetailView: View {
         FlightProfileCharts(
             sensorReadings: session.sensorReadings.sorted { $0.timestamp < $1.timestamp },
             flightDataPoints: session.flightDataPoints.sorted { $0.timestamp < $1.timestamp },
+            deviceReadings: session.deviceReadings.sorted { $0.timestamp < $1.timestamp },
             units: units,
             showAltitude: $showAltitude,
             showPressure: $showPressure,

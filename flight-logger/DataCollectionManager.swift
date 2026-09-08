@@ -9,6 +9,7 @@ import Foundation
 import SwiftData
 import SwiftUI
 import Observation
+import CoreLocation
 import os
 #if os(iOS)
 import UIKit
@@ -22,6 +23,7 @@ final class DataCollectionManager {
     let apiService = AirlineAPIService()
     let bleScanner = RuuviTagScanner()
     let locationKeepAlive = LocationKeepAlive()
+    let barometer = BarometerService()
 
     private(set) var activeSession: FlightSession?
     private var modelContext: ModelContext?
@@ -121,6 +123,9 @@ final class DataCollectionManager {
             self?.apiService.heartbeat()
         }
         locationKeepAlive.start()
+        // Cabin pressure from the phone itself: independent of the tag, and the
+        // only pressure source when no tag is present or the link is down.
+        barometer.start()
         lastHistorySync = nil
         lastSyncAttempt = nil
         startLiveness(session: session, context: modelContext)
@@ -217,6 +222,7 @@ final class DataCollectionManager {
                 context.insert(sample)
                 try? context.save()
 
+                self.recordDeviceReading(session: session, context: context)
                 self.enforceSessionLimit(session)
                 // Self-heal: if the scanner is idle while a session is active,
                 // it is not collecting at all and nothing else will notice. A
@@ -236,6 +242,34 @@ final class DataCollectionManager {
                     "alive — state=\(state, privacy: .public) gap=\(String(format: "%.1f", gap), privacy: .public)s readings=\(self.bleScanner.readingCount) store=\(storeReadable) net=\(net.ok)/\(Int(net.ms))ms"
                 )
             }
+        }
+    }
+
+    /// Persist the phone's own measurements for this tick.
+    ///
+    /// Written on the same cadence as everything else so rows line up on the
+    /// shared chart time axis, rather than each sensor storing at its own rate
+    /// and forcing a join across mismatched timestamps later.
+    private func recordDeviceReading(session: FlightSession, context: ModelContext) {
+        let fix = locationKeepAlive.lastLocation
+
+        let reading = DeviceReading(
+            pressureHPa: barometer.pressureHPa,
+            relativeAltitudeMeters: barometer.relativeAltitudeMeters,
+            gpsAltitudeMeters: fix?.altitude,
+            gpsVerticalAccuracy: fix?.verticalAccuracy,
+            gpsSpeedMPS: fix?.speed,
+            session: session
+        )
+        // Don't store rows that carry nothing; an empty row is indistinguishable
+        // from a real measurement of zero once it reaches a chart.
+        guard !reading.isEmpty else { return }
+
+        context.insert(reading)
+        do {
+            try context.save()
+        } catch {
+            logger.error("Failed to save device reading: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -343,6 +377,7 @@ final class DataCollectionManager {
     func stopSession() {
         apiService.stopPolling()
         locationKeepAlive.stop()
+        barometer.stop()
         locationKeepAlive.onHeartbeat = nil
         livenessTask?.cancel()
         livenessTask = nil

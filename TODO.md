@@ -363,7 +363,7 @@ toggle that defaults to off and is what triggers the system permission prompt.
 Nothing is collected before the user asks for it, and the app should say plainly
 that the data stays on device.
 
-### 22. iPhone barometer as a second cabin-pressure source
+### 22. ✅ iPhone barometer as a second cabin-pressure source
 
 `CMAltimeter` is available, with relative and absolute altitude
 (`isAbsoluteAltitudeAvailable`, iOS 15+). It measures cabin pressure directly —
@@ -379,13 +379,21 @@ Why this is the highest-value addition:
 - **Works with no tag at all**, which makes the app useful before the user owns
   or remembers one.
 
-No opt-in needed — this is cabin environment, the app's stated purpose.
+**Correction to the original entry:** this *does* trigger a system prompt.
+`CMAltimeter.authorizationStatus()` exists, so the barometer needs Motion &
+Fitness even though what it reports is cabin environment. That is iOS's
+classification. Kept out of Settings per the consent rule (it is environmental,
+not personal), with an honest usage string — but note it shares the permission
+with #24, so denying it here also blocks turbulence later.
 
-Open question: sampling rate and whether it survives backgrounding as well as
-the location keep-alive does. Verify on device rather than assuming; that
-assumption has been wrong repeatedly on this project.
+Built as `BarometerService`, converting CoreMotion's kPa to hPa so the phone's
+pressure is directly comparable with the tag's, and plotted on the *same* chart
+panel as the tag — a comparison only means anything on one scale.
 
-### 23. Log the location data we already collect
+**Still unverified on device.** Sampling rate and whether it survives
+backgrounding as well as the location keep-alive does are both untested.
+
+### 23. ✅ Log the location data we already collect
 
 `CLLocationManager` runs continuously for the keep-alive and every fix is
 currently discarded. `CLLocation` carries `altitude`, `ellipsoidalAltitude`,
@@ -395,9 +403,15 @@ This is free — the sensor is already running and already costing battery. It
 gives an altitude and groundspeed trace on **every** flight, including the
 majority with no airline WiFi, where `FlightDataPoint` is currently empty.
 
-Design note: keep it distinguishable from API-reported altitude rather than
-merging them. They disagree (GPS altitude vs pressure altitude vs the airline's
-figure), and the disagreement is interesting rather than a defect to hide.
+Done: `LocationKeepAlive` retains its fixes, and GPS altitude is plotted
+against the airline figure as a separate dashed series rather than merged —
+pressure altitude, GNSS altitude and the airline's number are three different
+quantities and the disagreement is the interesting part.
+
+Poor fixes are filtered from the chart (accuracy must be positive and under
+50 m) but still stored, so a bad fix stays distinguishable from no fix. Cabin
+GNSS is unreliable and plotting a 200 m-accuracy sample beside the airline
+figure would invent a disagreement that isn't real.
 
 ### 24. Motion / turbulence — requires opt-in
 

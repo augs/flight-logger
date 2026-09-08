@@ -29,6 +29,9 @@ final class FlightSession {
     @Relationship(deleteRule: .cascade, inverse: \FlightDataPoint.session)
     var flightDataPoints: [FlightDataPoint] = []
 
+    @Relationship(deleteRule: .cascade, inverse: \DeviceReading.session)
+    var deviceReadings: [DeviceReading] = []
+
     init(
         flightNumber: String = "",
         airline: String = "",

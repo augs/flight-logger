@@ -17,11 +17,26 @@ final class flight_loggerUITests: XCTestCase {
         // exactly what they're designed to do. `launch()` then fails with
         // "current state: Running Background", so start every test from a known
         // state. `terminate()` is a no-op if nothing is running.
-        XCUIApplication().terminate()
+        Self.terminateAndWait()
     }
 
     override func tearDownWithError() throws {
-        XCUIApplication().terminate()
+        Self.terminateAndWait()
+    }
+
+    /// Terminate and *wait for it to actually stop*.
+    ///
+    /// `terminate()` returns before the process is gone, and a recording
+    /// session keeps this app alive on purpose — the location keep-alive and
+    /// liveness task are doing their job. Without the wait, the next `launch()`
+    /// races a still-dying instance and fails with "current state: Running
+    /// Background". Assuming terminate() was synchronous is what made these
+    /// tests flaky rather than fixed the first time.
+    static func terminateAndWait(timeout: TimeInterval = 15) {
+        let app = XCUIApplication()
+        guard app.state != .notRunning else { return }
+        app.terminate()
+        _ = app.wait(for: .notRunning, timeout: timeout)
     }
 
     @MainActor

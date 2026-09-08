@@ -27,6 +27,7 @@ enum ModelStore {
         SensorReading.self,
         FlightDataPoint.self,
         DiagnosticSample.self,
+        DeviceReading.self,
     ])
 
     /// Explicit store location. This matches SwiftData's own default

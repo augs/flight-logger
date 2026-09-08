@@ -25,6 +25,7 @@ struct FlightProfileCharts: View {
 
     let sensorReadings: [SensorReading]
     let flightDataPoints: [FlightDataPoint]
+    let deviceReadings: [DeviceReading]
     let units: UnitPreference
 
     @Binding var showAltitude: Bool
@@ -45,10 +46,27 @@ struct FlightProfileCharts: View {
 
     private var panelHeight: CGFloat { 150 }
 
+    /// Device rows carrying a usable barometric pressure.
+    private var phonePressure: [DeviceReading] {
+        deviceReadings.filter { $0.pressureHPa != nil }
+    }
+
+    /// Device rows with a GNSS altitude the fix actually supports. Cabin fixes
+    /// are frequently poor, and plotting a 200 m-accuracy sample beside the
+    /// airline's figure would invent a disagreement that isn't real.
+    private var gpsAltitude: [DeviceReading] {
+        deviceReadings.filter {
+            guard $0.gpsAltitudeMeters != nil, let accuracy = $0.gpsVerticalAccuracy else { return false }
+            return accuracy > 0 && accuracy < 50
+        }
+    }
+
     // MARK: - Domain
 
     private var timeBounds: (start: Date, end: Date)? {
-        let stamps = sensorReadings.map(\.timestamp) + flightDataPoints.map(\.timestamp)
+        let stamps = sensorReadings.map(\.timestamp)
+            + flightDataPoints.map(\.timestamp)
+            + deviceReadings.map(\.timestamp)
         guard let first = stamps.min(), let last = stamps.max() else { return nil }
         // A single sample, or several within the same instant, would give a
         // zero-width domain that Charts renders as an empty panel.
@@ -78,6 +96,12 @@ struct FlightProfileCharts: View {
         VStack(alignment: .leading, spacing: 12) {
             header
             seriesToggles
+            if !phonePressure.isEmpty || !gpsAltitude.isEmpty {
+                HStack(spacing: 12) {
+                    legend("Tag / Airline", .orange, dashed: false)
+                    legend("Phone sensors", .purple, dashed: true)
+                }
+            }
 
             if timeBounds == nil {
                 ContentUnavailableView(
@@ -87,23 +111,50 @@ struct FlightProfileCharts: View {
                 )
                 .frame(height: panelHeight)
             } else {
-                if showAltitude && !flightDataPoints.isEmpty {
+                if showAltitude && !(flightDataPoints.isEmpty && gpsAltitude.isEmpty) {
                     panel(title: units.altitudeLabel, color: .blue) {
                         ForEach(flightDataPoints) { point in
                             LineMark(
                                 x: .value("Time", point.timestamp),
-                                y: .value("Altitude", units.altitudeValue(point.altitudeFt))
+                                y: .value("Altitude", units.altitudeValue(point.altitudeFt)),
+                                series: .value("Source", "Airline")
                             )
+                            .foregroundStyle(.blue)
+                        }
+                        // GNSS altitude is not pressure altitude and will not
+                        // match the airline's figure; both are kept rather than
+                        // reconciled.
+                        ForEach(gpsAltitude) { reading in
+                            LineMark(
+                                x: .value("Time", reading.timestamp),
+                                y: .value("Altitude", units.altitudeValue((reading.gpsAltitudeMeters ?? 0) / 0.3048)),
+                                series: .value("Source", "GPS")
+                            )
+                            .foregroundStyle(.teal)
+                            .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
                         }
                     }
                 }
-                if showPressure && !sensorReadings.isEmpty {
+                if showPressure && !(sensorReadings.isEmpty && phonePressure.isEmpty) {
                     panel(title: "Cabin Pressure (hPa)", color: .orange) {
                         ForEach(sensorReadings) { reading in
                             LineMark(
                                 x: .value("Time", reading.timestamp),
-                                y: .value("Pressure", reading.pressureHPa)
+                                y: .value("Pressure", reading.pressureHPa),
+                                series: .value("Source", "Tag")
                             )
+                            .foregroundStyle(.orange)
+                        }
+                        // Same quantity, independent sensor. Plotted together
+                        // deliberately — divergence between them is the signal.
+                        ForEach(phonePressure) { reading in
+                            LineMark(
+                                x: .value("Time", reading.timestamp),
+                                y: .value("Pressure", reading.pressureHPa ?? 0),
+                                series: .value("Source", "Phone")
+                            )
+                            .foregroundStyle(.purple)
+                            .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
                         }
                     }
                 }
@@ -264,6 +315,18 @@ struct FlightProfileCharts: View {
             toggle("Altitude", .blue, $showAltitude)
             toggle("Pressure", .orange, $showPressure)
             toggle("Humidity", .cyan, $showHumidity)
+        }
+    }
+
+    private func legend(_ label: String, _ color: Color, dashed: Bool) -> some View {
+        HStack(spacing: 4) {
+            Rectangle()
+                .fill(color)
+                .frame(width: dashed ? 6 : 14, height: 2)
+            if dashed {
+                Rectangle().fill(color).frame(width: 6, height: 2)
+            }
+            Text(label).font(.caption2).foregroundStyle(.secondary)
         }
     }
 

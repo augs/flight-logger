@@ -42,6 +42,12 @@ final class LocationKeepAlive: NSObject {
     /// work that would otherwise depend on a timer surviving suspension.
     var onHeartbeat: (() -> Void)?
 
+    /// Most recent fix. The manager runs continuously for the keep-alive
+    /// regardless, so these were previously discarded — which threw away an
+    /// altitude and ground-speed trace available on every flight, including the
+    /// majority that have no airline WiFi.
+    private(set) var lastLocation: CLLocation?
+
     private let manager = CLLocationManager()
     private let logger = Logger(subsystem: "org.pbx.flight-logger", category: "Location")
     private var wantsUpdates = false
@@ -89,6 +95,7 @@ final class LocationKeepAlive: NSObject {
         }
         manager.stopUpdatingLocation()
         manager.allowsBackgroundLocationUpdates = false
+        lastLocation = nil
         status = .idle
         logger.info("Location keep-alive stopped")
     }
@@ -127,7 +134,12 @@ extension LocationKeepAlive: CLLocationManagerDelegate {
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        // The positions are deliberately discarded — this is a heartbeat only.
+        // Keep the newest usable fix. Cabin GNSS is often poor, so accuracy is
+        // retained alongside the value rather than filtered here — a consumer
+        // charting this needs to tell a bad fix from a real change.
+        if let newest = locations.last {
+            lastLocation = newest
+        }
         onHeartbeat?()
     }
 

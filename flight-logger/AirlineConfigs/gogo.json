@@ -8,9 +8,14 @@
     "altitudeFt": "flifo.altitudeFt",
     "groundSpeedMPH": "flifo.groundSpeedMPH",
     "airTempF": "flifo.airTemperatureF",
-    "onGround": "flifo.onGround",
     "aircraftModel": "flifo.aircraftModel",
     "flightStatus": "flifo.flightStatus",
-    "timeRemainingMinutes": "flifo.timeRemainingToDestination"
+    "timeRemainingMinutes": "flifo.timeRemainingToDestination",
+    "onGroundStatusValues": [
+      "arrived",
+      "landed",
+      "at gate",
+      "on ground"
+    ]
   }
 }

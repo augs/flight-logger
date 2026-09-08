@@ -553,7 +553,8 @@ struct AirlineResponseParserTests {
         scheduledDepartureTimeLocal: "flifo.scheduledDepartureTimeLocal",
         scheduledArrivalTimeLocal: "flifo.scheduledArrivalTimeLocal",
         timeRemainingMinutes: "flifo.timeRemainingToDestination",
-        altitudeUnit: nil, speedUnit: nil, temperatureUnit: nil
+        altitudeUnit: nil, speedUnit: nil, temperatureUnit: nil,
+        onGroundStatusValues: nil
     )
 
     static func json(_ raw: String) throws -> [String: Any] {
@@ -667,7 +668,8 @@ struct SecondAirlineShapeTests {
         scheduledDepartureTimeLocal: nil,
         scheduledArrivalTimeLocal: nil,
         timeRemainingMinutes: "flightInfo.legs.0.telemetry.minutesRemaining",
-        altitudeUnit: nil, speedUnit: nil, temperatureUnit: nil
+        altitudeUnit: nil, speedUnit: nil, temperatureUnit: nil,
+        onGroundStatusValues: nil
     )
 
     static let body = """
@@ -723,7 +725,8 @@ struct ProviderUnitTests {
               aircraftModel: nil, flightStatus: nil,
               scheduledDepartureTimeLocal: nil, scheduledArrivalTimeLocal: nil,
               timeRemainingMinutes: nil,
-              altitudeUnit: altitudeUnit, speedUnit: speedUnit, temperatureUnit: temperatureUnit)
+              altitudeUnit: altitudeUnit, speedUnit: speedUnit, temperatureUnit: temperatureUnit,
+              onGroundStatusValues: nil)
     }
 
     static func json(_ raw: String) throws -> [String: Any] {
@@ -823,7 +826,8 @@ struct PanasonicV2Tests {
         scheduledDepartureTimeLocal: nil,
         scheduledArrivalTimeLocal: nil,
         timeRemainingMinutes: "time_to_destination_minutes",
-        altitudeUnit: nil, speedUnit: "knots", temperatureUnit: "celsius"
+        altitudeUnit: nil, speedUnit: "knots", temperatureUnit: "celsius",
+        onGroundStatusValues: nil
     )
 
     /// Shape per the FlightInfoV2 type in zisra/inflight-metrics.
@@ -890,7 +894,8 @@ struct LufthansaFlyNetTests {
         aircraftModel: "aircraftType", flightStatus: "flightPhase",
         scheduledDepartureTimeLocal: nil, scheduledArrivalTimeLocal: nil,
         timeRemainingMinutes: nil,
-        altitudeUnit: nil, speedUnit: "knots", temperatureUnit: nil
+        altitudeUnit: nil, speedUnit: "knots", temperatureUnit: nil,
+        onGroundStatusValues: nil
     )
 
     @Test func parsesNestedOriginAndDestination() throws {
@@ -909,5 +914,78 @@ struct LufthansaFlyNetTests {
         #expect(reading.altitudeFt == 38000)
         #expect(reading.onGround == false)
         #expect(abs(try #require(reading.groundSpeedMPH) - 540.9) < 0.5)
+    }
+}
+
+// MARK: - United has no on-ground boolean
+
+/// Verified against the FlightDetails type in `bogo/1K`, decoded from a real
+/// captured response: United's `flifo` carries 40 fields and none of them is an
+/// on-ground flag. The config previously mapped `flifo.onGround`, which does
+/// not exist — so auto-stop could never have fired for United. Text status is
+/// the only signal the API offers.
+struct UnitedOnGroundTests {
+
+    static func fields(statusValues: [String]?) -> AirlineConfig.FieldMappings {
+        .init(flightNumber: "flifo.flightNumber", origin: "flifo.originAirportCode",
+              destination: "flifo.destinationAirportCode", altitudeFt: "flifo.altitudeFt",
+              groundSpeedMPH: "flifo.groundSpeedMPH", airTempF: "flifo.airTemperatureF",
+              onGround: nil, aircraftModel: "flifo.aircraftModel",
+              flightStatus: "flifo.flightStatus",
+              scheduledDepartureTimeLocal: nil, scheduledArrivalTimeLocal: nil,
+              timeRemainingMinutes: "flifo.timeRemainingToDestination",
+              altitudeUnit: nil, speedUnit: nil, temperatureUnit: nil,
+              onGroundStatusValues: statusValues)
+    }
+
+    static func reading(status: String, statusValues: [String]?) throws -> AirlineResponseParser.Reading {
+        let raw = "{\"flifo\":{\"flightNumber\":\"1885\",\"flightStatus\":\"\(status)\"}}"
+        let json = try #require(JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
+        return AirlineResponseParser.parse(json: json, fields: Self.fields(statusValues: statusValues))
+    }
+
+    static let landed = ["arrived", "landed", "at gate", "on ground"]
+
+    /// The exact status string from the documented United response.
+    @Test func inFlightStatusIsNotOnGround() throws {
+        let reading = try Self.reading(
+            status: "In Flight - Estimated to Arrive 4 Minutes Early", statusValues: Self.landed)
+        #expect(reading.onGround == nil)
+    }
+
+    @Test func arrivalStatusEndsTheFlight() throws {
+        for status in ["Arrived", "LANDED", "At Gate", "Flight has arrived"] {
+            #expect(try Self.reading(status: status, statusValues: Self.landed).onGround == true,
+                    "status: \(status)")
+        }
+    }
+
+    /// Unknown text must be nil, never false-positive true. A wrong `true` ends
+    /// a recording mid-flight and cannot be undone; a wrong nil merely defers
+    /// to the inactivity backstop.
+    @Test func unknownStatusIsInconclusiveNotOnGround() throws {
+        for status in ["Boarding", "Delayed", "", "Taxiing to runway"] {
+            #expect(try Self.reading(status: status, statusValues: Self.landed).onGround == nil,
+                    "status: \(status)")
+        }
+    }
+
+    /// A config with no status values must not guess from text at all.
+    @Test func withoutConfiguredValuesStatusIsIgnored() throws {
+        #expect(try Self.reading(status: "Arrived", statusValues: nil).onGround == nil)
+    }
+
+    /// A real boolean, where a provider has one, still wins over text.
+    @Test func booleanFieldTakesPrecedence() throws {
+        let raw = "{\"weight_on_wheels\":false,\"flight_phase\":\"Arrived\"}"
+        let json = try #require(JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
+        let fields = AirlineConfig.FieldMappings(
+            flightNumber: nil, origin: nil, destination: nil, altitudeFt: nil,
+            groundSpeedMPH: nil, airTempF: nil, onGround: "weight_on_wheels",
+            aircraftModel: nil, flightStatus: "flight_phase",
+            scheduledDepartureTimeLocal: nil, scheduledArrivalTimeLocal: nil,
+            timeRemainingMinutes: nil, altitudeUnit: nil, speedUnit: nil,
+            temperatureUnit: nil, onGroundStatusValues: ["arrived"])
+        #expect(AirlineResponseParser.parse(json: json, fields: fields).onGround == false)
     }
 }

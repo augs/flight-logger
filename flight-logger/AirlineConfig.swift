@@ -44,6 +44,15 @@ struct AirlineConfig: Codable, Identifiable {
         let altitudeUnit: String?
         let speedUnit: String?
         let temperatureUnit: String?
+
+        /// Substrings of `flightStatus` that mean the aircraft is down.
+        ///
+        /// United has no on-ground boolean — its `flifo` object carries 40
+        /// fields and none of them is one (verified against a captured sample
+        /// in `bogo/1K`). Text status is the only signal it offers, so this
+        /// lets a config express that without special-casing an airline in
+        /// code. Matched case-insensitively as a substring.
+        let onGroundStatusValues: [String]?
     }
 }
 
@@ -83,7 +92,8 @@ enum AirlineConfigLoader {
                 timeRemainingMinutes: "flifo.timeRemainingToDestination",
                 altitudeUnit: nil,
                 speedUnit: nil,
-                temperatureUnit: nil
+                temperatureUnit: nil,
+                onGroundStatusValues: nil
             )
         )
     }

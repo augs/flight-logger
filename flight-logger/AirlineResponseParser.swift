@@ -87,8 +87,23 @@ enum AirlineResponseParser {
             airTempF: double(json, fields.airTempF)
                 .map { temperatureInFahrenheit($0, unit: fields.temperatureUnit) },
             timeRemainingMinutes: double(json, fields.timeRemainingMinutes),
-            onGround: bool(json, fields.onGround)
+            onGround: onGround(json, fields)
         )
+    }
+
+    /// On-ground, from a boolean field if the provider has one, otherwise from
+    /// the text status.
+    ///
+    /// Returns nil rather than false when neither is conclusive. A wrong
+    /// `false` merely delays auto-stop, which the inactivity backstop covers; a
+    /// wrong `true` ends a recording mid-flight and cannot be undone.
+    static func onGround(_ json: [String: Any], _ fields: AirlineConfig.FieldMappings) -> Bool? {
+        if let flag = bool(json, fields.onGround) { return flag }
+
+        guard let values = fields.onGroundStatusValues, !values.isEmpty,
+              let status = string(json, fields.flightStatus)?.lowercased() else { return nil }
+
+        return values.contains { status.contains($0.lowercased()) } ? true : nil
     }
 
     // MARK: - Path resolution

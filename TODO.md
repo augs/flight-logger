@@ -592,8 +592,33 @@ code, not from responses we have seen, so they may be stale or vary by fleet.
 What is still wanted:
 
 - A real capture from any flight, saved to `flight-loggerTests/Fixtures/`.
-- United's full field list. Its `onGround` mapping is still assumed rather than
-  observed — the documented example response does not include it.
+- ~~United's full field list~~ — **found, and it disproved the mapping.**
+  `bogo/1K`'s `FlightDetails` is a Swift `Codable` struct decoded from a real
+  captured sample. United's `flifo` carries 40 fields and **none is an
+  on-ground flag**: actualDepartureTime(Local), airSpeed KPH/MPH,
+  airTemperature C/F, aircraftModel, altitude Ft/Meters, arrival and departure
+  Concourse/Gate/Terminal, destination AirportCode/City/State, equipmentCode,
+  estimatedArrivalTime(Local), estimatedDepartureTimeLocal,
+  flightDurationMinutes, flightMapPath, flightNumber, flightStatus,
+  groundSpeed KPH/MPH, isFake, noseNumber, origin AirportCode/City/State,
+  scheduledArrival/DepartureTime(Local), tailNumber,
+  timeRemainingToDestination, windDirection.
+
+  Our config mapped `flifo.onGround`, which does not exist — so **United
+  auto-stop could never have fired**. Text `flightStatus` is the only signal
+  United offers, so `FieldMappings` gained `onGroundStatusValues` and both
+  United and Gogo now use it.
+
+  Note also `airTemperatureC`, `altitudeMeters` and `groundSpeedKPH` exist as
+  metric siblings, and `isFake` presumably marks demo data — worth handling if
+  a capture ever shows it true.
+
+**The status strings are still a guess.** "In Flight" is confirmed from the
+documented sample; "arrived", "landed", "at gate" and "on ground" are plausible
+but unobserved. The parser is deliberately asymmetric about this: unknown text
+yields nil, never false, because a wrong `true` ends a recording mid-flight and
+cannot be undone, while a wrong nil merely defers to the inactivity backstop.
+A real capture at arrival would settle it.
 - The `isPortalInitialized: false` state seen in `ejcx/uwc`: the portal answers
   200 with no `flifo` key before the flight is ready. Detection accepts any 200,
   so it would latch onto a portal that has no data yet.

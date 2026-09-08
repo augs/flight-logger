@@ -5,8 +5,9 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>
-		<string>external-accessory</string>
-		<string>processing</string>
+		<string>location</string>
 	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Keeps the flight recording running while your screen is off, so cabin sensor and flight data are logged for the whole flight.</string>
 </dict>
 </plist>

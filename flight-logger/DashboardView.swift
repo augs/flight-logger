@@ -49,6 +49,9 @@ struct DashboardView: View {
                 flightBanner(session)
                 connectionStatusBadge
                 bleStatusBadge
+                backgroundStatusBadge
+                historySyncCard
+                persistenceErrorBadge
                 sensorReadoutsCard(session)
                 flightDataCard(session)
                 liveChartCard(session)
@@ -156,21 +159,6 @@ struct DashboardView: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-            case .connected(let name):
-                Image(systemName: "sensor.fill")
-                    .foregroundStyle(.green)
-                Text(name)
-                    .font(.subheadline)
-                    .foregroundStyle(.green)
-                Image(systemName: "link")
-                    .font(.caption2)
-                    .foregroundStyle(.green)
-                if let lastRead = manager.bleScanner.lastReading {
-                    Spacer()
-                    Text(lastRead, style: .relative)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
             case .bluetoothOff:
                 Image(systemName: "antenna.radiowaves.left.and.right.slash")
                     .foregroundStyle(.secondary)
@@ -193,6 +181,125 @@ struct DashboardView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 4)
+    }
+
+    // MARK: - Background Status
+
+    /// Without location authorization the app is suspended shortly after the
+    /// screen locks and logging stops — the single most important thing to tell
+    /// the user before they put the phone away for a flight.
+    @ViewBuilder
+    private var backgroundStatusBadge: some View {
+        HStack(spacing: 8) {
+            switch manager.locationKeepAlive.status {
+            case .active:
+                Image(systemName: "moon.zzz.fill")
+                    .foregroundStyle(.green)
+                Text("Will keep logging with the screen off")
+                    .font(.subheadline)
+                    .foregroundStyle(.green)
+            case .denied, .restricted:
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Logging stops when the screen locks")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.orange)
+                    Text("Allow location access to record for the whole flight.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            case .idle:
+                EmptyView()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 4)
+    }
+
+    // MARK: - Tag History Sync
+
+    /// Live BLE stops the moment the screen locks, so the tag's onboard log is
+    /// the only source of cabin data for a backgrounded flight. When a sync
+    /// fails it's almost always because another app holds the tag's single
+    /// connection slot — which the user can fix, but only if we say so.
+    @ViewBuilder
+    private var historySyncCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Label("Tag History", systemImage: "arrow.down.circle")
+                    .font(.headline)
+                Spacer()
+                switch manager.bleScanner.historyState {
+                case .connecting:
+                    ProgressView().controlSize(.small)
+                    Text("Connecting…").font(.caption).foregroundStyle(.secondary)
+                case .downloading(let frames):
+                    ProgressView().controlSize(.small)
+                    Text("\(frames) frames").font(.caption).foregroundStyle(.secondary)
+                case .idle, .failed:
+                    Button("Sync Now") {
+                        manager.bleScanner.syncHistoryForActiveSession()
+                    }
+                    .font(.caption)
+                    .buttonStyle(.bordered)
+                }
+            }
+
+            switch manager.bleScanner.lastSyncResult {
+            case .never:
+                Text("Backfills cabin readings missed while the screen was locked.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            case .merged(let count, let at):
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Text(count > 0 ? "Added \(count) readings" : "Already up to date")
+                        .foregroundStyle(.secondary)
+                    Text("·").foregroundStyle(.secondary)
+                    Text(at, style: .relative).foregroundStyle(.secondary)
+                }
+                .font(.caption2)
+            case .failed(let reason, _):
+                HStack(alignment: .top, spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text(reason)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.caption2)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    // MARK: - Persistence Errors
+
+    /// Saves can fail without any other symptom — most likely data protection
+    /// blocking the store while the screen is locked. Make that visible rather
+    /// than losing a flight silently.
+    @ViewBuilder
+    private var persistenceErrorBadge: some View {
+        let message = manager.bleScanner.persistenceError ?? manager.apiService.persistenceError
+        if let message {
+            HStack(spacing: 8) {
+                Image(systemName: "externaldrive.badge.exclamationmark")
+                    .foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Not saving data")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.red)
+                    Text(message)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 4)
+        }
     }
 
     // MARK: - Sensor Readouts

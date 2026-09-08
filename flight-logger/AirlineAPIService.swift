@@ -8,6 +8,7 @@
 import Foundation
 import SwiftData
 import Observation
+import os
 
 /// Polls an airline WiFi API on a 30-second interval, creating
 /// FlightDataPoint records and auto-populating session metadata.
@@ -27,9 +28,23 @@ final class AirlineAPIService {
     /// Time remaining to destination in minutes, updated each poll cycle.
     private(set) var timeRemainingMinutes: Double?
 
+    /// Set when persisting a data point fails, so the UI can surface that
+    /// data is being lost rather than failing silently.
+    private(set) var persistenceError: String?
+
+    private let logger = Logger(subsystem: "org.pbx.flight-logger", category: "API")
+
     private var pollingTask: Task<Void, Never>?
     private var detectedConfig: AirlineConfig?
     private var hasPopulatedMetadata = false
+    private var flightSession: FlightSession?
+    private var modelContext: ModelContext?
+
+    private static let pollInterval: TimeInterval = 30
+    /// A poll this far overdue means the loop stalled; the heartbeat forces one.
+    private static let staleAfter: TimeInterval = 90
+    private static let detectRetryFloor: TimeInterval = 60
+    private static let detectRetryCeiling: TimeInterval = 300
 
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
@@ -44,41 +59,10 @@ final class AirlineAPIService {
     func startPolling(flightSession: FlightSession, modelContext: ModelContext) {
         stopPolling()
         hasPopulatedMetadata = false
+        self.flightSession = flightSession
+        self.modelContext = modelContext
         status = .detecting
-
-        pollingTask = Task { [weak self] in
-            guard let self else { return }
-
-            // Try to detect which airline WiFi we're on
-            let configs = AirlineConfigLoader.loadAll()
-            var matched: AirlineConfig?
-
-            for config in configs {
-                if Task.isCancelled { return }
-                if await self.probe(config: config) {
-                    matched = config
-                    break
-                }
-            }
-
-            if Task.isCancelled { return }
-
-            if let config = matched {
-                self.detectedConfig = config
-                self.status = .connected(airline: config.airline)
-                flightSession.airline = config.airline
-                flightSession.recordingMode = "api-auto"
-
-                // Poll loop
-                while !Task.isCancelled {
-                    await self.poll(config: config, flightSession: flightSession, modelContext: modelContext)
-                    if Task.isCancelled { break }
-                    try? await Task.sleep(for: .seconds(30))
-                }
-            } else {
-                self.status = .noAPI
-            }
-        }
+        launchLoop()
     }
 
     /// Stop polling immediately.
@@ -86,28 +70,87 @@ final class AirlineAPIService {
         pollingTask?.cancel()
         pollingTask = nil
         detectedConfig = nil
+        flightSession = nil
+        modelContext = nil
         timeRemainingMinutes = nil
         if status != .idle {
             status = .idle
         }
     }
 
-    /// Resume the poll loop if we previously detected an airline API
-    /// but the polling task is no longer running (e.g. after suspension).
+    /// Restart the poll loop if it is no longer running.
+    ///
+    /// The loop can die when the app is suspended mid-`Task.sleep`. With the
+    /// location keep-alive active that should not happen, but this is cheap
+    /// insurance and covers the case where location permission was denied.
     func resumeIfNeeded(flightSession: FlightSession, modelContext: ModelContext) {
-        guard let config = detectedConfig else { return }
-        // If polling task is still alive, nothing to do
-        if let task = pollingTask, !task.isCancelled { return }
+        self.flightSession = flightSession
+        self.modelContext = modelContext
 
-        hasPopulatedMetadata = true // already populated on first detection
-        pollingTask = Task { [weak self] in
-            guard let self else { return }
-            while !Task.isCancelled {
-                await self.poll(config: config, flightSession: flightSession, modelContext: modelContext)
-                if Task.isCancelled { break }
-                try? await Task.sleep(for: .seconds(30))
-            }
+        if let task = pollingTask, !task.isCancelled { return }
+        launchLoop()
+    }
+
+    /// Background heartbeat — called from the location keep-alive. Restarts a
+    /// dead loop and forces a poll if the last one is overdue.
+    func heartbeat() {
+        guard let session = flightSession, let context = modelContext else { return }
+        resumeIfNeeded(flightSession: session, modelContext: context)
+
+        if let last = lastPollTime, Date().timeIntervalSince(last) > Self.staleAfter {
+            logger.info("Poll overdue by \(Int(Date().timeIntervalSince(last)))s — forcing")
+            pollOnce(flightSession: session, modelContext: context)
         }
+    }
+
+    // MARK: - Poll loop
+
+    private func launchLoop() {
+        guard let session = flightSession, let context = modelContext else { return }
+        pollingTask = Task { [weak self] in
+            await self?.run(flightSession: session, modelContext: context)
+        }
+    }
+
+    private func run(flightSession: FlightSession, modelContext: ModelContext) async {
+        var detectBackoff = Self.detectRetryFloor
+
+        while !Task.isCancelled {
+            // Detection retries rather than giving up permanently — the user
+            // may start recording before joining the airline WiFi, or the
+            // portal may only come up once airborne.
+            if detectedConfig == nil {
+                if status != .noAPI { status = .detecting }
+
+                if let config = await detect() {
+                    detectedConfig = config
+                    status = .connected(airline: config.airline)
+                    flightSession.airline = config.airline
+                    flightSession.recordingMode = "api-auto"
+                    detectBackoff = Self.detectRetryFloor
+                } else {
+                    status = .noAPI
+                    try? await Task.sleep(for: .seconds(detectBackoff))
+                    detectBackoff = min(detectBackoff * 2, Self.detectRetryCeiling)
+                    continue
+                }
+            }
+
+            guard let config = detectedConfig else { continue }
+
+            await poll(config: config, flightSession: flightSession, modelContext: modelContext)
+            if Task.isCancelled { break }
+            try? await Task.sleep(for: .seconds(Self.pollInterval))
+        }
+    }
+
+    /// Probe every bundled config and return the first that answers.
+    private func detect() async -> AirlineConfig? {
+        for config in AirlineConfigLoader.loadAll() {
+            if Task.isCancelled { return nil }
+            if await probe(config: config) { return config }
+        }
+        return nil
     }
 
     /// Perform a single poll — used to piggyback API calls on BLE wakeups
@@ -181,7 +224,17 @@ final class AirlineAPIService {
                 stopPolling()
             }
 
-            try? modelContext.save()
+            // Kept separate from the network catch below so a persistence
+            // failure isn't misreported as an API error.
+            do {
+                try modelContext.save()
+                persistenceError = nil
+            } catch {
+                // Most likely cause is data protection blocking the store while
+                // the screen is locked. Never swallow this.
+                persistenceError = error.localizedDescription
+                logger.error("Failed to save flight data point: \(error.localizedDescription, privacy: .public)")
+            }
 
         } catch {
             status = .error(error.localizedDescription)

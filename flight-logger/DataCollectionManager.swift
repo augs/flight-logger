@@ -9,20 +9,50 @@ import Foundation
 import SwiftData
 import SwiftUI
 import Observation
+import os
 #if os(iOS)
 import UIKit
 #endif
 
-/// App-level coordinator that owns both data collection services
+/// App-level coordinator that owns the data collection services
 /// and manages their lifecycle across background/foreground transitions.
 @Observable
 final class DataCollectionManager {
 
     let apiService = AirlineAPIService()
     let bleScanner = RuuviTagScanner()
+    let locationKeepAlive = LocationKeepAlive()
 
     private(set) var activeSession: FlightSession?
     private var modelContext: ModelContext?
+    private var livenessTask: Task<Void, Never>?
+
+    /// Sampling cadence for the background diagnostic probe.
+    private static let livenessInterval: TimeInterval = 15
+
+    /// How often to pull the tag's onboard log mid-session.
+    ///
+    /// Live BLE is dead once backgrounded, so this is the only route to cabin
+    /// data across a locked screen. The tag's own log cadence (~5 min observed)
+    /// caps resolution, so syncing much more often than this gains nothing
+    /// while costing a connection and a scanning pause each time.
+    private static let historySyncInterval: TimeInterval = 15 * 60
+
+    /// Hard ceiling on session length. The longest scheduled flight in service
+    /// is roughly 19h (SIN–JFK), so this leaves ~2h of headroom. Without it a
+    /// session that never sees an `onGround` indicator — every manual session —
+    /// would run until the battery died.
+    private static let maxSessionDuration: TimeInterval = 21 * 60 * 60
+
+    /// Shorter backoff after a failed sync — a busy connection slot usually frees up.
+    private static let historyRetryInterval: TimeInterval = 2 * 60
+
+    /// Watermark: end of the data window we have successfully merged.
+    private var lastHistorySync: Date?
+    /// When we last *attempted* a sync, successful or not.
+    private var lastSyncAttempt: Date?
+
+    private let logger = Logger(subsystem: "org.pbx.flight-logger", category: "Collection")
 
     #if os(iOS)
     private var backgroundTaskID: UIBackgroundTaskIdentifier = .invalid
@@ -54,21 +84,192 @@ final class DataCollectionManager {
     func startSession(_ session: FlightSession, modelContext: ModelContext) {
         self.activeSession = session
         self.modelContext = modelContext
+
         apiService.startPolling(flightSession: session, modelContext: modelContext)
         bleScanner.startScanning(flightSession: session, modelContext: modelContext)
 
-        bleScanner.onDataReceived = { [weak self] in
-            self?.handleBLEDataReceived()
+        // Keeps the process alive with the screen off — without this the poll
+        // loop dies ~30s after backgrounding and BLE delivery stops.
+        locationKeepAlive.onHeartbeat = { [weak self] in
+            self?.apiService.heartbeat()
+        }
+        locationKeepAlive.start()
+        lastHistorySync = nil
+        lastSyncAttempt = nil
+        startLiveness(session: session, context: modelContext)
+
+        logger.info("Session started")
+    }
+
+    /// Periodic proof-of-life written to the store, plus a network probe.
+    ///
+    /// Once the screen locks nothing is observable from outside: logs can't be
+    /// streamed from a normally-launched app, and attaching a debugger changes
+    /// the suspension behaviour under test. So each tick persists a
+    /// `DiagnosticSample` — the gaps between timestamps reveal when iOS stopped
+    /// executing us, and the network fields show whether background HTTP still
+    /// completes and at what real cadence.
+    private func startLiveness(session: FlightSession, context: ModelContext) {
+        livenessTask?.cancel()
+        livenessTask = Task { [weak self] in
+            var previous = Date()
+
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.livenessInterval))
+                guard let self, !Task.isCancelled else { return }
+
+                let now = Date()
+                let gap = now.timeIntervalSince(previous)
+                previous = now
+
+                // Exercise the network the same way the airline poll would.
+                let net = await Self.probeNetwork()
+
+                #if os(iOS)
+                let state = await MainActor.run { () -> String in
+                    switch UIApplication.shared.applicationState {
+                    case .active: return "active"
+                    case .inactive: return "inactive"
+                    case .background: return "background"
+                    @unknown default: return "unknown"
+                    }
+                }
+                #else
+                let state = "n/a"
+                #endif
+
+                var storeReadable = true
+                var storeError = ""
+                do {
+                    // Reading the store is the only honest check that data
+                    // protection isn't blocking us while locked.
+                    _ = try context.fetchCount(FetchDescriptor<SensorReading>())
+                } catch {
+                    storeReadable = false
+                    storeError = error.localizedDescription
+                }
+
+                let sample = DiagnosticSample(
+                    timestamp: now,
+                    appState: state,
+                    secondsSincePrevious: gap,
+                    storeReadable: storeReadable,
+                    storeError: storeError,
+                    readingCount: self.bleScanner.readingCount,
+                    bleStatus: String(describing: self.bleScanner.status),
+                    locationStatus: String(describing: self.locationKeepAlive.status),
+                    networkOK: net.ok,
+                    networkMilliseconds: net.ms,
+                    networkError: net.error
+                )
+                context.insert(sample)
+                try? context.save()
+
+                self.enforceSessionLimit(session)
+                self.syncHistoryIfDue(session)
+
+                self.logger.info(
+                    "alive — state=\(state, privacy: .public) gap=\(String(format: "%.1f", gap), privacy: .public)s readings=\(self.bleScanner.readingCount) store=\(storeReadable) net=\(net.ok)/\(Int(net.ms))ms"
+                )
+            }
+        }
+    }
+
+    /// End a session that has outrun the maximum plausible flight length.
+    private func enforceSessionLimit(_ session: FlightSession) {
+        let elapsed = Date().timeIntervalSince(session.recordingStartedAt)
+        guard elapsed > Self.maxSessionDuration else { return }
+
+        logger.warning("Session exceeded \(Int(Self.maxSessionDuration / 3600))h — auto-ending")
+        session.recordingEndedAt = Date()
+        stopSession()
+    }
+
+    /// Pull the tag's log periodically so cabin data survives a locked screen.
+    ///
+    /// Syncing suspends live scanning and needs the tag's single connection
+    /// slot, so failures are expected and non-fatal — the next tick retries,
+    /// which is the "retry opportunistically" behaviour we want when another
+    /// app is holding the tag.
+    private func syncHistoryIfDue(_ session: FlightSession) {
+        guard bleScanner.historyState == .idle else { return }
+
+        // Back off less after a failure than after a success: a failure usually
+        // means the tag's connection slot was busy, which tends to clear.
+        let interval: TimeInterval
+        if case .failed = bleScanner.lastSyncResult {
+            interval = Self.historyRetryInterval
+        } else {
+            interval = Self.historySyncInterval
+        }
+
+        // Attempt timing is tracked separately from the data watermark, so a
+        // string of failures can't turn into a retry every liveness tick.
+        let lastAttempt = lastSyncAttempt ?? session.recordingStartedAt
+        guard Date().timeIntervalSince(lastAttempt) >= interval else { return }
+
+        // The watermark only advances on success, so a failed sync re-requests
+        // the same window rather than losing it.
+        let since = lastHistorySync ?? session.recordingStartedAt
+        lastSyncAttempt = Date()
+
+        logger.info("History sync due — requesting log since \(since, privacy: .public)")
+        bleScanner.syncHistory(since: since) { [weak self] merged in
+            guard let self else { return }
+            if case .merged = self.bleScanner.lastSyncResult {
+                self.lastHistorySync = Date()
+            }
+            self.logger.info("Periodic history sync merged \(merged) entries")
+        }
+    }
+
+    /// Small HTTP request used to test whether networking works in background.
+    /// Apple's captive-portal endpoint is tiny and highly available.
+    private static func probeNetwork() async -> (ok: Bool, ms: Double, error: String) {
+        guard let url = URL(string: "https://captive.apple.com/hotspot-detect.html") else {
+            return (false, 0, "bad url")
+        }
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 10
+
+        let started = Date()
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            let ms = Date().timeIntervalSince(started) * 1000
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let ok = (200...299).contains(code)
+            return (ok, ms, ok ? "" : "HTTP \(code)")
+        } catch {
+            return (false, Date().timeIntervalSince(started) * 1000, error.localizedDescription)
         }
     }
 
     /// Stop all data collection.
     func stopSession() {
         apiService.stopPolling()
-        bleScanner.stopScanning()
+        locationKeepAlive.stop()
+        locationKeepAlive.onHeartbeat = nil
+        livenessTask?.cancel()
+        livenessTask = nil
+        endBackgroundTask()
+
+        let session = activeSession
         activeSession = nil
         modelContext = nil
-        endBackgroundTask()
+
+        guard let session else {
+            bleScanner.stopScanning()
+            return
+        }
+
+        // Pull the tag's own log to backfill anything the advertisement stream
+        // missed, before releasing the scanner's session reference. The scanner
+        // holds its own refs, so this can finish after the UI has moved on.
+        bleScanner.syncHistory(since: session.recordingStartedAt) { [weak self] merged in
+            self?.logger.info("Session ended — merged \(merged) history entries")
+            self?.bleScanner.stopScanning()
+        }
     }
 
     // MARK: - Scene Phase
@@ -76,16 +277,18 @@ final class DataCollectionManager {
     /// Call when the app enters the background.
     func handleEnteredBackground() {
         guard activeSession != nil else { return }
+        // Belt-and-braces: if location permission was denied, this at least
+        // buys ~30 seconds to finish an in-flight request.
         beginBackgroundTask()
-        // Services keep running — BLE continues via background mode,
-        // API polling continues until background time expires.
+        if locationKeepAlive.status != .active {
+            logger.warning("Backgrounded without location keep-alive — collection will stop shortly")
+        }
     }
 
     /// Call when the app becomes active again.
     func handleBecameActive() {
         guard let session = activeSession, let context = modelContext else { return }
         endBackgroundTask()
-        // Ensure API polling is alive (it may have been suspended)
         apiService.resumeIfNeeded(flightSession: session, modelContext: context)
     }
 
@@ -106,14 +309,5 @@ final class DataCollectionManager {
         UIApplication.shared.endBackgroundTask(backgroundTaskID)
         backgroundTaskID = .invalid
         #endif
-    }
-
-    // MARK: - BLE Piggyback Polling
-
-    /// Called when BLE scanner receives data. In background, this is our
-    /// opportunity to also fire an API poll.
-    private func handleBLEDataReceived() {
-        guard let session = activeSession, let context = modelContext else { return }
-        apiService.pollOnce(flightSession: session, modelContext: context)
     }
 }

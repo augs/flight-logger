@@ -53,6 +53,91 @@ final class FlightSession {
         self.recordingMode = recordingMode
     }
 
+    // MARK: - Quality
+
+    /// Summary of how well a session actually captured data.
+    ///
+    /// The app can log nothing at all for long stretches — a dropped tag link,
+    /// a denied permission — and until this existed the only way to find out
+    /// was to open the charts and squint, or query the store by hand. That is
+    /// the wrong time to discover a flight wasn't recorded.
+    struct Coverage {
+        let readings: Int
+        let highResolution: Int
+        let backfilled: Int
+        /// Rows predating provenance tracking — classifiable as neither.
+        let unclassified: Int
+        /// Longest interval between consecutive readings.
+        let largestGap: TimeInterval
+        /// Fraction of the session covered at better than the tag's log cadence.
+        let liveFraction: Double
+
+        var isEmpty: Bool { readings == 0 }
+        /// True when provenance is mostly unknown, so a live/backfilled split
+        /// would be misleading rather than informative.
+        var provenanceUnknown: Bool { unclassified > readings / 2 }
+    }
+
+    var coverage: Coverage {
+        let sorted = sensorReadings.sorted { $0.timestamp < $1.timestamp }
+        guard !sorted.isEmpty else {
+            return Coverage(readings: 0, highResolution: 0, backfilled: 0,
+                            unclassified: 0, largestGap: 0, liveFraction: 0)
+        }
+
+        var largestGap: TimeInterval = 0
+        for (a, b) in zip(sorted, sorted.dropFirst()) {
+            largestGap = max(largestGap, b.timestamp.timeIntervalSince(a.timestamp))
+        }
+
+        let high = sorted.filter { $0.readingSource.isHighResolution }.count
+        let backfilled = sorted.filter { $0.readingSource == .history }.count
+        let unclassified = sorted.count - high - backfilled
+
+        // Fraction is over classified rows only; including unknowns in the
+        // denominator would understate sessions we simply can't judge.
+        let classified = high + backfilled
+        return Coverage(
+            readings: sorted.count,
+            highResolution: high,
+            backfilled: backfilled,
+            unclassified: unclassified,
+            largestGap: largestGap,
+            liveFraction: classified > 0 ? Double(high) / Double(classified) : 0
+        )
+    }
+
+    /// Observed cadence of the tag's onboard log, measured from backfilled
+    /// readings.
+    ///
+    /// The app cannot set this — it is configured in Ruuvi Station — but it
+    /// determines the resolution of everything recovered while the link is
+    /// down, so it is worth surfacing rather than leaving the user to infer it
+    /// from chart spacing. Median rather than mean: a single missing entry
+    /// doubles one gap and would drag an average well off the true interval.
+    var backfillInterval: TimeInterval? {
+        let stamps = sensorReadings
+            .filter { $0.readingSource == .history }
+            .map(\.timestamp)
+            .sorted()
+        guard stamps.count >= 3 else { return nil }
+
+        let gaps = zip(stamps, stamps.dropFirst())
+            .map { $1.timeIntervalSince($0) }
+            .sorted()
+        return gaps[gaps.count / 2]
+    }
+
+    /// Range of cabin pressure seen, the most legible one-glance summary of a
+    /// flight — it tracks the cabin altitude profile directly.
+    var pressureRange: (low: Double, high: Double)? {
+        let values = sensorReadings.map(\.pressureHPa)
+        guard let low = values.min(), let high = values.max() else { return nil }
+        return (low, high)
+    }
+
+    var hasFlightData: Bool { !flightDataPoints.isEmpty }
+
     var displayTitle: String {
         if flightNumber.isEmpty {
             return "Flight on \(recordingStartedAt.formatted(date: .abbreviated, time: .shortened))"

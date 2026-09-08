@@ -112,9 +112,235 @@ Displayed while Flight Recording Mode is active:
 ## Technical Notes
 
 - BLE scanning uses `CoreBluetooth`; the app requests `bluetooth-always` usage only while recording is active to minimize battery impact
-- API polling uses `URLSession` with a 30-second `Timer`; polling stops immediately when recording ends or the app is backgrounded
+- API polling uses `URLSession` on a 30-second loop; it runs for the whole session, including while backgrounded (see below)
 - The airline plugin JSON configs are bundled in the app target and loaded at startup
 - All numeric sensor values are stored in SI units (°C, hPa, meters); display conversion to imperial units is a UI-layer concern
+
+---
+
+## Background Execution Constraints
+
+These are iOS platform limits, established by investigation. They are recorded
+here so the constraints aren't rediscovered the hard way.
+
+### Never connect to the tag during live logging
+
+Sensor data comes from the RuuviTag's BLE **advertisement** packet. Connecting
+to the tag destroys that stream twice over:
+
+- iOS does not deliver `didDiscover` for a peripheral currently connected to
+  the device.
+- RuuviTag firmware stops advertising once a central connects.
+
+Connection is therefore reserved for history sync, which explicitly suspends
+live scanning for its duration and resumes it afterwards.
+
+### Scan with no service filter — verified 2026-09-07
+
+A RuuviTag in RAWv2 broadcast mode advertises **no service UUIDs at all**,
+in neither the advertisement nor the scan response. Measured directly against
+hardware over 12-second scans:
+
+| Scan | Ruuvi advertisements discovered |
+|---|---|
+| `scanForPeripherals(withServices: [NUS])` | **0** |
+| `scanForPeripherals(withServices: nil)` | 1 |
+
+RAWv2 sensor data lives entirely in manufacturer-specific data (company
+`0x0499`). Filtering must therefore be done in `didDiscover`, never by
+CoreBluetooth. Do not reintroduce a service filter.
+
+### Background advertisement capture is not achievable
+
+This follows directly from the above, and there is no workaround:
+
+- Background scans **must** filter by service UUID, and unfiltered scans return
+  nothing. Since the tag advertises no service UUIDs, **no filter exists that
+  can match it in the background.** CoreBluetooth cannot filter on manufacturer
+  data at all.
+- `CBCentralManagerScanOptionAllowDuplicatesKey` is **ignored in the
+  background** — one callback per peripheral, then silence.
+- Background scan intervals are throttled aggressively regardless.
+
+Note this restriction is tied to *app state*, not process liveness: the
+location keep-alive stops the app being suspended, but it is still
+"backgrounded" as far as CoreBluetooth is concerned. **Location keep-alive
+rescues API polling; it cannot rescue BLE scanning.**
+
+Live advertisement scanning is therefore a **foreground-only** path, and the
+tag's onboard log is the only route to sensor data covering a locked screen.
+
+### Gap-free data comes from the tag's onboard log
+
+The RuuviTag records to its own flash continuously (~10 days at the default
+interval) whether or not a phone is listening. Downloading that log over the
+Nordic UART Service is what produces complete flight data. Live advertisements
+provide the real-time dashboard; the log provides the record.
+
+**The tag accepts only one connection at a time — verified 2026-09-07.**
+
+This is the single most important operational constraint. With another central
+already connected (Ruuvi Station on a phone), the tag advertises
+`kCBAdvDataIsConnectable = 0` and `connect` hangs silently until timeout — it
+does not fail fast, and nothing in the advertisement explains why.
+
+Measured, same tag, minutes apart:
+
+| Phone Bluetooth | `connectable` | `connect()` |
+|---|---|---|
+| On (Ruuvi Station holding the slot) | `false` | hangs, times out |
+| Off | `true` | succeeds immediately |
+
+Consequences:
+
+- **flight-logger and Ruuvi Station contend for the same slot.** History sync
+  will fail whenever another app holds the connection. The user must not have
+  Ruuvi Station connected during a sync.
+- `beginHistoryConnection` checks the connectable flag and fails fast with an
+  actionable message rather than hanging for 60 seconds.
+- This is *not* a firmware limitation or a button-press requirement, which were
+  both plausible-looking wrong theories along the way.
+
+**Protocol verified against hardware.** With the slot free, a full log read
+succeeded: 34 frames, correct end-of-data. Request bytes, big-endian framing,
+all three scalings, and terminator detection all confirmed; decoded values
+matched the tag's live advertisement to within sensor drift. The captured
+frames are pinned as regression tests in `RuuviHardwareCaptureTests`.
+
+**Log cadence was ~301s (5 minutes)** on this tag — the effective resolution of
+any history download, and much coarser than the live advertisement stream.
+Adjustable in Ruuvi Station if finer flight data is wanted.
+
+### Two frame types arrive on NUS TX
+
+Verified on device. Once connected, the tag sends **both**:
+
+- **18-byte heartbeat frames** beginning `05` — a Data Format 5 payload
+  carrying the tag's *current* reading, streamed continuously while connected.
+  Not log data; the parser rejects them.
+- **11-byte log frames** (`3A 31 10 …`) — the actual history, sent in response
+  to the log-read request.
+
+This matters: an early diagnosis of "the tag never answers the log request" was
+wrong. Heartbeats were arriving the whole time and being discarded, so
+`historySamples` stayed empty and the sync looked dead. Anything debugging this
+path must distinguish the two rather than counting notifications.
+
+Heartbeats are now recorded as readings. Measured cadence **1.98s**, with the
+DF5 sequence number incrementing by exactly 1 per frame — no dropped
+measurements. That is finer than advertisement scanning managed even in the
+foreground, and it arrives over the **connection**, a delivery path that (unlike
+scanning) is supported for backgrounded apps.
+
+The consequence has not been exploited yet: heartbeats only flow while
+connected, i.e. during the ~45s sync window. Holding a persistent connection
+would give continuous 2s cabin data across a locked screen and supersede
+periodic history sync — but it locks Ruuvi Station out for the flight, costs
+battery, and excludes advertisement scanning (the tag stops advertising when
+connected). See TODO.md #19.
+
+### CBConnectPeripheralOptionEnableAutoReconnect is rejected — verified 2026-09-08
+
+The iOS 17+ auto-reconnect option is declared in the SDK and reads as exactly
+what this design wants, but on this device CoreBluetooth refuses the connect
+outright:
+
+    Link failed: One or more parameters were invalid. (autoReconnect=true)
+    Retrying link without auto-reconnect
+    Link connected — discovering NUS      <- immediate
+
+Isolated by retrying the same peripheral with the option removed. The code now
+drops the option on a parameter rejection and falls back.
+
+Consequence: **the 60s watchdog is load-bearing, not a safety net.** Nothing
+else re-establishes a dropped link.
+
+### Restored connections do not replay their delegate callbacks
+
+CoreBluetooth state restoration hands back a *connected* peripheral without
+calling didConnect, didDiscoverServices or didUpdateNotificationState. Two
+traps, both hit on device:
+
+- GATT calls made from `willRestoreState` are silently dropped, because it runs
+  **before** the manager reports `poweredOn`. Rediscovery must be deferred.
+- The TX characteristic is already notifying, and `setNotifyValue(true)` on an
+  already-notifying characteristic does **not** call back — so waiting for that
+  callback leaves the link permanently "not ready".
+
+Symptom if unhandled: heartbeats arrive and readings look fine, but `linkRX` is
+nil and `linkReady` is false, so history sync silently cannot issue its request
+and the diagnostics misreport the link as down.
+
+### Periodic sync is background-only
+
+Foreground live scanning is far higher resolution (~5s) than the tag's ~5 min
+log, and `syncHistory` must `stopScan()` for the duration of a connection.
+Running periodic sync in the foreground therefore stops better data being
+collected in order to fetch worse data — and with a long timeout it starves
+scanning badly enough to look like a hang. Periodic sync runs only while
+backgrounded, where live BLE is dead anyway. Session-end and manual syncs are
+unconditional.
+
+### Measured background behaviour — 2026-09-07, iPhone 17
+
+App launched from the Home screen (no debugger), screen locked, 37 samples over
+9.3 minutes. Every sample recorded `applicationState = background`:
+
+| Measure | Result |
+|---|---|
+| Sample cadence | 15.0–16.0 s against a 15 s target — **no throttling** |
+| Suspension gaps | **none** — 37 consecutive samples |
+| HTTPS requests | **37 / 37 succeeded**, 9–110 ms |
+| Store readable | **37 / 37** |
+| BLE readings | **0** across the whole locked period |
+
+Conclusions: the location keep-alive holds the process at full cadence with
+only **When In Use** authorization; background networking is completely
+unaffected, so airline API polling will work in flight; and BLE really is dead
+in the background, independently confirmed with no debugger attached.
+
+### Staying alive requires location
+
+`beginBackgroundTask` grants roughly 30 seconds — not a flight. An active
+`CLLocationManager` with `allowsBackgroundLocationUpdates` is the supported way
+to keep the process running for hours, and it is what allows the API poll loop
+and foreground-quality BLE scanning to continue with the screen off.
+
+The location *data* is discarded; only the runtime matters. `CLLocationManager`
+runs at the coarsest accuracy, only while a session is recording, and with
+`pausesLocationUpdatesAutomatically = false` — iOS otherwise pauses updates when
+it decides the device is stationary, silently killing the keep-alive mid-flight.
+
+Note this does not depend on obtaining an actual fix; GPS in a cabin is
+unreliable, but requesting updates keeps the app alive whether fixes arrive or
+not.
+
+### The store must survive screen lock
+
+The container is built with `completeUntilFirstUserAuthentication` applied to
+the Application Support directory (so SQLite's `-wal`/`-shm` sidecars inherit
+it) and to the store files themselves.
+
+**Correction:** this was originally introduced on the theory that SwiftData
+defaults to `NSFileProtectionComplete` and was therefore silently dropping
+writes while locked. That premise appears to be wrong — iOS defaults
+app-created files to `NSFileProtectionCompleteUntilFirstUserAuthentication`,
+which is already lock-safe, and Core Data sets the same class by default.
+
+Measured over 37 samples across 9.3 minutes with the device locked and no
+debugger attached: **0 store failures**. That is consistent both with the fix
+working and with the store never having been at risk. Setting the class
+explicitly is still worth keeping — it removes the dependency on an undocumented
+default — but it should not be described as having fixed a data-loss bug.
+
+### Live Activities do not grant runtime
+
+A Live Activity is a display mechanism, not an execution one. It renders in a
+separate widget process and gives the host app no background time. Updates
+require either the app to already be running (`activity.update()`) or an
+ActivityKit push — and APNs needs real internet, which in-flight captive portals
+generally block. The airline API itself is local to the portal, which is why
+polling works without internet.
 
 ---
 

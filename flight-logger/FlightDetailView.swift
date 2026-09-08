@@ -54,8 +54,30 @@ struct FlightDetailView: View {
                 LabeledContent("Duration", value: Self.formatDuration(duration))
             }
             LabeledContent("Mode", value: session.recordingMode)
-            LabeledContent("Sensor readings", value: "\(session.sensorReadings.count)")
             LabeledContent("Flight data points", value: "\(session.flightDataPoints.count)")
+
+            Divider()
+
+            // How the readings were obtained matters as much as how many there
+            // are: backfilled rows are 5-minute resolution, live ones a minute.
+            let coverage = session.coverage
+            LabeledContent("Sensor readings", value: "\(coverage.readings)")
+            if coverage.readings > 0 {
+                if coverage.provenanceUnknown {
+                    LabeledContent("Source", value: "Recorded before provenance tracking")
+                        .foregroundStyle(.secondary)
+                } else {
+                    LabeledContent("Source",
+                                   value: "\(coverage.highResolution) live · \(coverage.backfilled) backfilled")
+                }
+                LabeledContent("Largest gap",
+                               value: FlightProfileCharts.formatSpan(coverage.largestGap))
+                    .foregroundStyle(coverage.largestGap > 600 ? .orange : .primary)
+                if let interval = session.backfillInterval {
+                    LabeledContent("Tag log interval",
+                                   value: FlightProfileCharts.formatSpan(interval))
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
@@ -65,108 +87,16 @@ struct FlightDetailView: View {
     // MARK: - Charts
 
     private var chartSection: some View {
-        let sensorData = session.sensorReadings.sorted { $0.timestamp < $1.timestamp }
-        let flightData = session.flightDataPoints.sorted { $0.timestamp < $1.timestamp }
-
-        return VStack(alignment: .leading, spacing: 16) {
-            Text("Flight Profile")
-                .font(.headline)
-
-            seriesToggles
-
-            if showAltitude && !flightData.isEmpty {
-                seriesChart(title: units.altitudeLabel, color: .blue) {
-                    ForEach(flightData) { point in
-                        LineMark(
-                            x: .value("Time", point.timestamp),
-                            y: .value("Altitude", units.altitudeValue(point.altitudeFt))
-                        )
-                    }
-                }
-            }
-
-            if showPressure && !sensorData.isEmpty {
-                seriesChart(title: "Cabin Pressure (hPa)", color: .orange) {
-                    ForEach(sensorData) { reading in
-                        LineMark(
-                            x: .value("Time", reading.timestamp),
-                            y: .value("Pressure", reading.pressureHPa)
-                        )
-                    }
-                }
-            }
-
-            if showHumidity && !sensorData.isEmpty {
-                seriesChart(title: "Humidity (%)", color: .cyan) {
-                    ForEach(sensorData) { reading in
-                        LineMark(
-                            x: .value("Time", reading.timestamp),
-                            y: .value("Humidity", reading.humidityPercent)
-                        )
-                    }
-                }
-            }
-        }
+        FlightProfileCharts(
+            sensorReadings: session.sensorReadings.sorted { $0.timestamp < $1.timestamp },
+            flightDataPoints: session.flightDataPoints.sorted { $0.timestamp < $1.timestamp },
+            units: units,
+            showAltitude: $showAltitude,
+            showPressure: $showPressure,
+            showHumidity: $showHumidity
+        )
         .padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private var seriesToggles: some View {
-        HStack(spacing: 12) {
-            seriesToggle(label: "Altitude", color: .blue, isOn: $showAltitude)
-            seriesToggle(label: "Pressure", color: .orange, isOn: $showPressure)
-            seriesToggle(label: "Humidity", color: .cyan, isOn: $showHumidity)
-        }
-    }
-
-    private func seriesToggle(label: String, color: Color, isOn: Binding<Bool>) -> some View {
-        Button {
-            withAnimation { isOn.wrappedValue.toggle() }
-        } label: {
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(isOn.wrappedValue ? color : .gray.opacity(0.3))
-                    .frame(width: 8, height: 8)
-                Text(label)
-                    .font(.caption)
-                    .foregroundStyle(isOn.wrappedValue ? .primary : .secondary)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(
-                isOn.wrappedValue ? color.opacity(0.1) : Color.clear,
-                in: Capsule()
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func seriesChart<C: ChartContent>(title: String, color: Color, @ChartContentBuilder content: () -> C) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Chart {
-                content()
-            }
-            .foregroundStyle(color)
-            .chartScrollableAxes(.horizontal)
-            .chartYAxis {
-                AxisMarks(position: .leading) { _ in
-                    AxisGridLine()
-                    AxisValueLabel()
-                        .font(.system(size: 9))
-                }
-            }
-            .chartXAxis {
-                AxisMarks { _ in
-                    AxisGridLine()
-                    AxisValueLabel(format: .dateTime.hour().minute())
-                        .font(.system(size: 9))
-                }
-            }
-            .frame(height: 160)
-        }
     }
 
     // MARK: - Helpers

@@ -13,20 +13,7 @@ struct flight_loggerApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @State private var dataCollectionManager = DataCollectionManager()
 
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            FlightSession.self,
-            SensorReading.self,
-            FlightDataPoint.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-
-        do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
-        }
-    }()
+    var sharedModelContainer: ModelContainer = ModelStore.makeContainer()
 
     var body: some Scene {
         WindowGroup {

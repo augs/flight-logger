@@ -47,8 +47,7 @@ struct DashboardView: View {
         ScrollView {
             VStack(spacing: 20) {
                 flightBanner(session)
-                connectionStatusBadge
-                bleStatusBadge
+                RecordingStatusView(manager: manager)
                 sensorReadoutsCard(session)
                 flightDataCard(session)
                 liveChartCard(session)
@@ -85,114 +84,6 @@ struct DashboardView: View {
         .frame(maxWidth: .infinity)
         .padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    // MARK: - Connection Status
-
-    private var connectionStatusBadge: some View {
-        HStack(spacing: 8) {
-            switch manager.apiService.status {
-            case .idle:
-                EmptyView()
-            case .detecting:
-                ProgressView()
-                    .controlSize(.small)
-                Text("Detecting airline WiFi...")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            case .connected(let airline):
-                Image(systemName: "wifi")
-                    .foregroundStyle(.green)
-                Text("Connected to \(airline)")
-                    .font(.subheadline)
-                    .foregroundStyle(.green)
-                if let lastPoll = manager.apiService.lastPollTime {
-                    Spacer()
-                    Text(lastPoll, style: .relative)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            case .noAPI:
-                Image(systemName: "wifi.slash")
-                    .foregroundStyle(.secondary)
-                Text("No airline API detected — manual mode")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            case .error(let message):
-                Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                Text(message)
-                    .font(.subheadline)
-                    .foregroundStyle(.orange)
-                    .lineLimit(1)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 4)
-    }
-
-    // MARK: - BLE Status
-
-    private var bleStatusBadge: some View {
-        HStack(spacing: 8) {
-            switch manager.bleScanner.status {
-            case .idle:
-                EmptyView()
-            case .scanning:
-                ProgressView()
-                    .controlSize(.small)
-                Text("Scanning for RuuviTag...")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            case .found(let name):
-                Image(systemName: "sensor.fill")
-                    .foregroundStyle(.green)
-                Text(name)
-                    .font(.subheadline)
-                    .foregroundStyle(.green)
-                if let lastRead = manager.bleScanner.lastReading {
-                    Spacer()
-                    Text(lastRead, style: .relative)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            case .connected(let name):
-                Image(systemName: "sensor.fill")
-                    .foregroundStyle(.green)
-                Text(name)
-                    .font(.subheadline)
-                    .foregroundStyle(.green)
-                Image(systemName: "link")
-                    .font(.caption2)
-                    .foregroundStyle(.green)
-                if let lastRead = manager.bleScanner.lastReading {
-                    Spacer()
-                    Text(lastRead, style: .relative)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-            case .bluetoothOff:
-                Image(systemName: "antenna.radiowaves.left.and.right.slash")
-                    .foregroundStyle(.secondary)
-                Text("Bluetooth is off")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            case .unauthorized:
-                Image(systemName: "hand.raised")
-                    .foregroundStyle(.orange)
-                Text("Bluetooth access not authorized")
-                    .font(.subheadline)
-                    .foregroundStyle(.orange)
-            case .unavailable:
-                Image(systemName: "sensor")
-                    .foregroundStyle(.secondary)
-                Text("Bluetooth not configured")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 4)
     }
 
     // MARK: - Sensor Readouts

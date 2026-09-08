@@ -361,11 +361,19 @@ chart-value conversion and labels; `SettingsView` has the picker; `DashboardView
 and `FlightDetailView` both consume it; `.system` reads
 `Locale.current.measurementSystem`. Storage stays SI, conversion is UI-only.
 
-### 12. Chart zoom and dynamic fit
+### 12. ✅ Chart zoom and dynamic fit
 
-Charts should be zoomable, default to fit-all-data, and resize dynamically as
-points arrive. Currently `FlightDetailView` has scrollable axes but no zoom or
-auto-fit.
+Built in `FlightProfileCharts`. Fit-all is the default and tracks newly arriving
+points rather than pinning to a stale window; pinch zooms, clamped to a 2-minute
+floor and the full span as ceiling; a "Fit All" button appears only once zoomed.
+
+The larger problem found while doing it: each panel owned its own scroll state,
+so panning one left the others behind — which defeats the main reason to open
+the screen, correlating cabin pressure against altitude. Pan, zoom and scrub
+state now live in one place and apply to every panel.
+
+Also added touch-to-scrub with a shared rule and per-panel value readout, and
+fixed a degenerate domain (a session with one reading rendered an empty panel).
 
 ### 13. Log export for Grafana
 

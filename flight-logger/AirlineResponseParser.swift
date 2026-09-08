@@ -42,6 +42,37 @@ enum AirlineResponseParser {
         }
     }
 
+    // MARK: - Unit conversion
+
+    /// Provider units, normalised to what the app stores (feet, MPH, °F).
+    ///
+    /// Defaults match the field names — a config that omits these is assumed to
+    /// already be in the app's units, which is what the original United config
+    /// does.
+    static func altitudeInFeet(_ value: Double, unit: String?) -> Double {
+        switch unit?.lowercased() {
+        case "m", "meter", "meters", "metres": value / 0.3048
+        default: value
+        }
+    }
+
+    static func speedInMPH(_ value: Double, unit: String?) -> Double {
+        switch unit?.lowercased() {
+        case "kt", "kts", "knot", "knots": value * 1.15078
+        case "kph", "kmh", "km/h", "kmph": value * 0.621371
+        case "mps", "m/s": value * 2.23694
+        default: value
+        }
+    }
+
+    static func temperatureInFahrenheit(_ value: Double, unit: String?) -> Double {
+        switch unit?.lowercased() {
+        case "c", "celsius", "centigrade": value * 9 / 5 + 32
+        case "k", "kelvin": (value - 273.15) * 9 / 5 + 32
+        default: value
+        }
+    }
+
     static func parse(json: [String: Any], fields: AirlineConfig.FieldMappings) -> Reading {
         Reading(
             flightNumber: string(json, fields.flightNumber),
@@ -49,9 +80,12 @@ enum AirlineResponseParser {
             destination: string(json, fields.destination),
             aircraftModel: string(json, fields.aircraftModel),
             flightStatus: string(json, fields.flightStatus),
-            altitudeFt: double(json, fields.altitudeFt),
-            groundSpeedMPH: double(json, fields.groundSpeedMPH),
-            airTempF: double(json, fields.airTempF),
+            altitudeFt: double(json, fields.altitudeFt)
+                .map { altitudeInFeet($0, unit: fields.altitudeUnit) },
+            groundSpeedMPH: double(json, fields.groundSpeedMPH)
+                .map { speedInMPH($0, unit: fields.speedUnit) },
+            airTempF: double(json, fields.airTempF)
+                .map { temperatureInFahrenheit($0, unit: fields.temperatureUnit) },
             timeRemainingMinutes: double(json, fields.timeRemainingMinutes),
             onGround: bool(json, fields.onGround)
         )

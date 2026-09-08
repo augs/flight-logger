@@ -18,20 +18,32 @@ struct AirlineConfig: Codable, Identifiable {
     let fields: FieldMappings
 
     struct FieldMappings: Codable {
-        let flightNumber: String
-        let origin: String
-        let destination: String
-        let altitudeFt: String
-        let groundSpeedMPH: String
-        let airTempF: String
-        let onGround: String
+        // All optional: providers expose very different subsets. Panasonic's
+        // feed carries altitude and speed but no flight number or on-ground
+        // flag, and requiring those would make it impossible to describe.
+        let flightNumber: String?
+        let origin: String?
+        let destination: String?
+        let altitudeFt: String?
+        let groundSpeedMPH: String?
+        let airTempF: String?
+        let onGround: String?
 
-        // Optional extended fields
         let aircraftModel: String?
         let flightStatus: String?
         let scheduledDepartureTimeLocal: String?
         let scheduledArrivalTimeLocal: String?
         let timeRemainingMinutes: String?
+
+        // Units the *provider* uses. The app stores feet, MPH and Fahrenheit
+        // throughout, so anything else is converted on the way in.
+        //
+        // This is not optional polish: Panasonic reports ground speed in knots
+        // and UGO in km/h, so treating a provider's number as MPH because the
+        // field is named that way would record speeds wrong by 15-60%.
+        let altitudeUnit: String?
+        let speedUnit: String?
+        let temperatureUnit: String?
     }
 }
 
@@ -68,7 +80,10 @@ enum AirlineConfigLoader {
                 flightStatus: "flifo.flightStatus",
                 scheduledDepartureTimeLocal: nil,
                 scheduledArrivalTimeLocal: nil,
-                timeRemainingMinutes: "flifo.timeRemainingToDestination"
+                timeRemainingMinutes: "flifo.timeRemainingToDestination",
+                altitudeUnit: nil,
+                speedUnit: nil,
+                temperatureUnit: nil
             )
         )
     }

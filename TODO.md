@@ -536,7 +536,50 @@ Worth investigating, cheapest first:
 Relevant to #23: raising location accuracy to recover GPS speed would push this
 number the wrong way.
 
-### 27. Collect real airline API responses
+### 27. Collect real airline API responses — partly done
+
+**Found via GitHub code search 2026-09-08**, from working third-party clients
+rather than guesswork. Four configs added; provenance below so nobody later
+mistakes them for our own captures.
+
+| Provider | Endpoint | Source |
+|---|---|---|
+| Gogo Inflight | `airborne.gogoinflight.com/portal/r/getAllSessionData` | `ejcx/uwc` |
+| Panasonic Avionics | `services.inflightpanasonic.aero/inflight/services/flightdata/v2/flightdata` | `microg/GmsCore` |
+| BoardConnect (Lufthansa/Austrian/SWISS) | `<base>/map/api/flightData` | `microg/GmsCore` |
+| UGO | `api.ife.ugo.aero/navigation/positions` | `microg/GmsCore` |
+
+Two findings that mattered more than the endpoints:
+
+- **Gogo uses United's exact path and `flifo` shape.** One response format
+  already covers two providers, and `ejcx/uwc` confirms United's numerics really
+  do arrive as strings.
+- **Panasonic covers many carriers.** microG maps it to Cathay Pacific,
+  Singapore KrisWorld, SWISS, Edelweiss, TAP Air Portugal, Shenzhen Airlines and
+  Telekom FlyNet. A single config is worth far more than one airline.
+
+**Units are the trap.** Panasonic reports `ground_speed_knots`, UGO reports
+km/h and `altitude_meters`. The config field names describe what the *app*
+stores, so adding these without unit declarations would have recorded speed
+15–60% wrong while looking entirely plausible. `FieldMappings` now carries
+optional `altitudeUnit` / `speedUnit` / `temperatureUnit`, converted on the way
+in and covered by tests.
+
+**Still unverified — these are derived, not captured.** The endpoints and field
+names come from other people's working code, not from responses we have seen.
+They may be stale, region-specific, or wrong in detail. What is still wanted:
+
+- A real capture from any flight, saved to `flight-loggerTests/Fixtures/`.
+- Whether these providers expose flight number, origin, destination and an
+  on-ground flag at all. The location-oriented feeds microG uses do not, so
+  those configs currently record altitude and speed only, and **auto-stop
+  cannot fire for them** — the 2h inactivity backstop is what ends those
+  sessions.
+- The `isPortalInitialized: false` state seen in `ejcx/uwc`: the portal answers
+  200 with no `flifo` key before the flight is ready. Detection currently
+  accepts any 200, so it would latch onto a portal that has no data yet.
+
+### 13. Log export for Grafana
 
 The parser and mock server are in place; what is missing is *data*. Only United
 has a real config, and its response shape is known from a single documented

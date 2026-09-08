@@ -552,7 +552,8 @@ struct AirlineResponseParserTests {
         flightStatus: "flifo.flightStatus",
         scheduledDepartureTimeLocal: "flifo.scheduledDepartureTimeLocal",
         scheduledArrivalTimeLocal: "flifo.scheduledArrivalTimeLocal",
-        timeRemainingMinutes: "flifo.timeRemainingToDestination"
+        timeRemainingMinutes: "flifo.timeRemainingToDestination",
+        altitudeUnit: nil, speedUnit: nil, temperatureUnit: nil
     )
 
     static func json(_ raw: String) throws -> [String: Any] {
@@ -665,7 +666,8 @@ struct SecondAirlineShapeTests {
         flightStatus: "flightInfo.legs.0.status",
         scheduledDepartureTimeLocal: nil,
         scheduledArrivalTimeLocal: nil,
-        timeRemainingMinutes: "flightInfo.legs.0.telemetry.minutesRemaining"
+        timeRemainingMinutes: "flightInfo.legs.0.telemetry.minutesRemaining",
+        altitudeUnit: nil, speedUnit: nil, temperatureUnit: nil
     )
 
     static let body = """
@@ -701,5 +703,100 @@ struct SecondAirlineShapeTests {
             JSONSerialization.jsonObject(with: Data(landed.utf8)) as? [String: Any]
         )
         #expect(AirlineResponseParser.parse(json: json, fields: Self.fields).onGround == true)
+    }
+}
+
+// MARK: - Unit conversion and researched provider shapes
+
+/// Providers do not agree on units, and the config field names (`altitudeFt`,
+/// `groundSpeedMPH`) describe what the *app* stores, not what the provider
+/// sends. Panasonic reports knots and UGO reports km/h and metres, so treating
+/// a provider's number as already-correct would record speed wrong by 15–60%.
+struct ProviderUnitTests {
+
+    static func fields(
+        altitude: String? = nil, speed: String? = nil, temp: String? = nil,
+        altitudeUnit: String? = nil, speedUnit: String? = nil, temperatureUnit: String? = nil
+    ) -> AirlineConfig.FieldMappings {
+        .init(flightNumber: nil, origin: nil, destination: nil,
+              altitudeFt: altitude, groundSpeedMPH: speed, airTempF: temp, onGround: nil,
+              aircraftModel: nil, flightStatus: nil,
+              scheduledDepartureTimeLocal: nil, scheduledArrivalTimeLocal: nil,
+              timeRemainingMinutes: nil,
+              altitudeUnit: altitudeUnit, speedUnit: speedUnit, temperatureUnit: temperatureUnit)
+    }
+
+    static func json(_ raw: String) throws -> [String: Any] {
+        try #require(JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
+    }
+
+    @Test func convertsKnotsMetresAndCelsius() {
+        #expect(abs(AirlineResponseParser.speedInMPH(500, unit: "knots") - 575.39) < 0.1)
+        #expect(abs(AirlineResponseParser.speedInMPH(800, unit: "kph") - 497.1) < 0.1)
+        #expect(abs(AirlineResponseParser.altitudeInFeet(10668, unit: "meters") - 35000) < 1)
+        #expect(abs(AirlineResponseParser.temperatureInFahrenheit(-51, unit: "C") - -59.8) < 0.1)
+    }
+
+    /// A config that omits units is assumed to already be in the app's units —
+    /// which is what the original United config relies on.
+    @Test func missingUnitMeansNoConversion() {
+        #expect(AirlineResponseParser.speedInMPH(433, unit: nil) == 433)
+        #expect(AirlineResponseParser.altitudeInFeet(35000, unit: nil) == 35000)
+        #expect(AirlineResponseParser.temperatureInFahrenheit(-2, unit: nil) == -2)
+    }
+
+    /// Panasonic's shape, per its published flightdata/v2 endpoint: altitude in
+    /// feet already, but ground speed in knots.
+    @Test func panasonicKnotsBecomeMPH() throws {
+        let json = try Self.json("""
+        {"altitude_feet":35000,"ground_speed_knots":500,
+         "current_coordinates":{"latitude":51.5,"longitude":-0.1}}
+        """)
+        let reading = AirlineResponseParser.parse(
+            json: json,
+            fields: Self.fields(altitude: "altitude_feet", speed: "ground_speed_knots", speedUnit: "knots")
+        )
+        #expect(reading.altitudeFt == 35000)
+        #expect(abs(try #require(reading.groundSpeedMPH) - 575.39) < 0.1)
+    }
+
+    /// UGO returns a JSON array and uses metric throughout — both conversions
+    /// and array indexing have to work together.
+    @Test func ugoArrayAndMetricUnits() throws {
+        let raw = """
+        [{"latitude":48.1,"longitude":11.6,"altitude_meters":10668,
+          "speed_kilometers_per_hour":800,"bearing_in_degree":270}]
+        """
+        // Top level is an array, so it is wrapped the way the app would have to.
+        let array = try #require(JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [Any])
+        let json: [String: Any] = ["0": array[0]]
+
+        let reading = AirlineResponseParser.parse(
+            json: json,
+            fields: Self.fields(altitude: "0.altitude_meters", speed: "0.speed_kilometers_per_hour",
+                                altitudeUnit: "meters", speedUnit: "kph")
+        )
+        #expect(abs(try #require(reading.altitudeFt) - 35000) < 1)
+        #expect(abs(try #require(reading.groundSpeedMPH) - 497.1) < 0.1)
+    }
+
+    /// Every bundled config must decode, or it silently never matches in the
+    /// air — the one place it cannot be debugged.
+    @Test func allBundledConfigsDecode() throws {
+        let directory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()     // flight-loggerTests
+            .deletingLastPathComponent()     // repo root
+            .appending(path: "flight-logger/AirlineConfigs")
+
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
+        #expect(files.count >= 5)
+
+        for file in files {
+            let data = try Data(contentsOf: file)
+            let config = try JSONDecoder().decode(AirlineConfig.self, from: data)
+            #expect(!config.airline.isEmpty, "\(file.lastPathComponent) has no airline")
+            #expect(URL(string: config.url) != nil, "\(file.lastPathComponent) has an unusable url")
+        }
     }
 }

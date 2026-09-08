@@ -1,0 +1,9 @@
+{
+  "airline": "Panasonic Avionics",
+  "url": "https://services.inflightpanasonic.aero/inflight/services/flightdata/v2/flightdata",
+  "fields": {
+    "altitudeFt": "altitude_feet",
+    "groundSpeedMPH": "ground_speed_knots",
+    "speedUnit": "knots"
+  }
+}

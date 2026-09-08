@@ -1,0 +1,10 @@
+{
+  "airline": "UGO Inflight",
+  "url": "https://api.ife.ugo.aero/navigation/positions",
+  "fields": {
+    "altitudeFt": "0.altitude_meters",
+    "groundSpeedMPH": "0.speed_kilometers_per_hour",
+    "altitudeUnit": "meters",
+    "speedUnit": "kph"
+  }
+}

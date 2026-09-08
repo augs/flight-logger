@@ -1,0 +1,8 @@
+{
+  "airline": "Lufthansa FlyNet",
+  "url": "https://www.lufthansa-flynet.com/map/api/flightData",
+  "fields": {
+    "altitudeFt": "altitude",
+    "groundSpeedMPH": "groundSpeed"
+  }
+}

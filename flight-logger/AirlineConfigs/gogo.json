@@ -1,0 +1,16 @@
+{
+  "airline": "Gogo Inflight",
+  "url": "http://airborne.gogoinflight.com/portal/r/getAllSessionData",
+  "fields": {
+    "flightNumber": "flifo.flightNumber",
+    "origin": "flifo.originAirportCode",
+    "destination": "flifo.destinationAirportCode",
+    "altitudeFt": "flifo.altitudeFt",
+    "groundSpeedMPH": "flifo.groundSpeedMPH",
+    "airTempF": "flifo.airTemperatureF",
+    "onGround": "flifo.onGround",
+    "aircraftModel": "flifo.aircraftModel",
+    "flightStatus": "flifo.flightStatus",
+    "timeRemainingMinutes": "flifo.timeRemainingToDestination"
+  }
+}

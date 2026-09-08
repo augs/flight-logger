@@ -352,6 +352,105 @@ mid-flight state. The 21h cap remains as the outer bound.
 
 ---
 
+## P2b — Additional sensors
+
+Investigated 2026-09-08 against the iOS 26.5 SDK headers, not from memory.
+
+**Consent principle:** environmental measurements are what the app is *for* and
+need no separate opt-in. Motion and health data are different in kind — they
+describe the user, not the cabin — so each is gated behind an explicit Settings
+toggle that defaults to off and is what triggers the system permission prompt.
+Nothing is collected before the user asks for it, and the app should say plainly
+that the data stays on device.
+
+### 22. iPhone barometer as a second cabin-pressure source
+
+`CMAltimeter` is available, with relative and absolute altitude
+(`isAbsoluteAltitudeAvailable`, iOS 15+). It measures cabin pressure directly —
+the same physical quantity as the RuuviTag, from a wholly independent sensor
+with no BLE involved.
+
+Why this is the highest-value addition:
+
+- **Cross-comparison**, which was the original motivation: two sensors, one
+  quantity, plotted on the shared time axis the charts already provide.
+- **Redundancy that matters.** The 2026-09-08 commute had a 16-minute link
+  outage; the barometer would have covered it at ~1 Hz with no tag involved.
+- **Works with no tag at all**, which makes the app useful before the user owns
+  or remembers one.
+
+No opt-in needed — this is cabin environment, the app's stated purpose.
+
+Open question: sampling rate and whether it survives backgrounding as well as
+the location keep-alive does. Verify on device rather than assuming; that
+assumption has been wrong repeatedly on this project.
+
+### 23. Log the location data we already collect
+
+`CLLocationManager` runs continuously for the keep-alive and every fix is
+currently discarded. `CLLocation` carries `altitude`, `ellipsoidalAltitude`,
+`verticalAccuracy`, `speed` and `course`.
+
+This is free — the sensor is already running and already costing battery. It
+gives an altitude and groundspeed trace on **every** flight, including the
+majority with no airline WiFi, where `FlightDataPoint` is currently empty.
+
+Design note: keep it distinguishable from API-reported altitude rather than
+merging them. They disagree (GPS altitude vs pressure altitude vs the airline's
+figure), and the disagreement is interesting rather than a defect to hide.
+
+### 24. Motion / turbulence — requires opt-in
+
+`CMMotionManager` vertical acceleration variance gives a real turbulence metric
+on the same time axis as cabin pressure. Novel, and genuinely informative about
+a flight.
+
+**Gated behind a Settings toggle**, default off. Motion access carries its own
+system prompt (`NSMotionUsageDescription`) and describes the user's movement,
+not the cabin.
+
+Cost to check before committing: continuous accelerometer sampling is not free
+on battery, and the useful output is a summary statistic rather than raw
+samples — decide the aggregation window before storing anything.
+
+### 25. HealthKit: SpO2, heart rate, HRV — requires opt-in
+
+**SpO2 is read-only and cannot be polled.** `HKQuantityTypeIdentifierOxygenSaturation`
+exists for reading, but there is no API anywhere in HealthKit to trigger a
+measurement — no `startBloodOxygen` equivalent. The Watch samples on its own
+schedule, largely when the wearer is still. Log opportunistically; do not design
+around a cadence.
+
+Legal status resolved: the ITC found Apple's redesigned blood oxygen feature
+non-infringing and terminated the Masimo case (March–April 2026), so the feature
+is available again on US watches.
+
+**Heart rate is the better physiological signal** precisely because its cadence
+*can* be driven: an `HKWorkoutSession` on the Watch samples roughly every 5s.
+`HeartRateVariabilitySDNN` and `RespiratoryRate` are also available.
+
+Cabin altitude is typically 6,000–8,000 ft equivalent, so the physiological
+response to it is the interesting cross-comparison against cabin pressure.
+
+**Gated behind a Settings toggle**, default off, with HealthKit's own
+authorisation flow. This is health data: request read-only access to the
+specific types used, nothing broader, and state that it is never transmitted.
+
+Scope warning: high-frequency heart rate needs a **watchOS app target**, which
+is a substantially larger piece of work than items 22–24. Worth splitting the
+HealthKit read (phone-only, opportunistic) from the Watch workout session
+(new target) if this is picked up.
+
+### Not available — do not go looking
+
+Neither the iPhone nor the Watch exposes **ambient temperature or humidity**.
+CoreMotion has nothing, and the Series 8+ temperature sensor only produces
+overnight sleeping wrist-temperature deviation, not real-time ambient. The
+RuuviTag is the only source for those two, which is the argument for keeping it
+central rather than treating it as replaceable.
+
+---
+
 ## P3 — Features
 
 ### 11. ✅ Metric / imperial unit preference

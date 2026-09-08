@@ -370,3 +370,38 @@ GET https://www.unitedwifi.com/portal/r/getAllSessionData
   }
 }
 ```
+
+---
+
+## Data Collection and Consent
+
+The app distinguishes two kinds of measurement, and treats them differently.
+
+**Environmental data** — cabin temperature, humidity, pressure, altitude,
+ground speed — is what the app exists to record. It describes the aircraft
+cabin, not the user, and is collected whenever a session is recording without
+any separate opt-in beyond the permissions the platform already requires
+(Bluetooth for the tag, location for background execution).
+
+**Personal data** — motion, heart rate, blood oxygen, HRV, respiratory rate —
+describes the *user*. Each source is gated behind its own Settings toggle that
+defaults to off, and enabling that toggle is what triggers the system
+permission prompt. Nothing is requested speculatively at launch, and nothing is
+collected before it has been asked for.
+
+All data stays on device. There is no account, no sync, and no analytics; the
+only egress is an export the user explicitly performs.
+
+Practical consequence for anyone adding a sensor: if a measurement would tell
+you something about the person rather than the cabin, it needs a toggle, and
+the toggle needs to be the thing that asks for permission — not a prompt on
+first launch that the user answers before understanding why.
+
+### Sensors that do not exist
+
+Neither iPhone nor Apple Watch exposes ambient temperature or humidity to
+third-party apps. Verified against the iOS 26.5 SDK: CoreMotion has no such
+API, and the Series 8+ wrist temperature sensor produces only overnight
+sleeping-temperature deviation. The RuuviTag is the sole source for those two
+measurements, which is why the tag remains central to the design rather than a
+convenience.

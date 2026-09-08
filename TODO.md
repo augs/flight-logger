@@ -271,6 +271,22 @@ If it works backgrounded, it supersedes periodic history sync as the primary
 source: 2s resolution versus ~5 min, and no gap across a locked screen. History
 sync would remain as the backfill for anything missed.
 
+### 20. Apple Watch — ruled out, do not revisit
+
+Investigated 2026-09-07. The Watch cannot work around the background BLE
+constraints; it is strictly worse than the phone:
+
+- **Peripherals are disconnected when a watchOS app is suspended**, so a held
+  link — the whole basis of our approach — dies.
+- **"Waking up the app when something happens over BLE is not supported in
+  watchOS."** The connection-wake mechanism we depend on does not exist there.
+- The `com.apple.developer.bluetooth-central-background` entitlement is granted
+  very selectively — reportedly only to watchOS apps talking to continuous
+  glucose monitors. Not obtainable for this.
+- watchOS restricts apps to central role and at most two peripherals.
+- The tag has one connection slot, so a Watch link would contend with the phone
+  rather than supplement it, and the Watch battery is far smaller.
+
 ### 18. Consider lowering the tag's log interval
 
 Observed cadence was ~301s (5 min), which is coarse for a flight profile.

@@ -28,7 +28,16 @@ final class DataCollectionManager {
     private var livenessTask: Task<Void, Never>?
 
     /// Sampling cadence for the background diagnostic probe.
-    private static let livenessInterval: TimeInterval = 15
+    ///
+    /// This loop also drives history sync scheduling and the session cap, so it
+    /// can't be disabled outright — but 15s was a debugging cadence, not a
+    /// flight one. Over a 10h flight that was ~2,400 wake-ups and disk writes.
+    private static let livenessInterval: TimeInterval = 60
+
+    /// Run the network probe only every Nth sample. Each probe is a real HTTPS
+    /// request, and in a cabin with poor connectivity a failing one burns radio
+    /// retries — the single most expensive thing this loop did per tick.
+    private static let networkProbeEverySamples = 5
 
     /// How often to pull the tag's onboard log mid-session.
     ///
@@ -113,6 +122,7 @@ final class DataCollectionManager {
         livenessTask?.cancel()
         livenessTask = Task { [weak self] in
             var previous = Date()
+            var sampleIndex = 0
 
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(Self.livenessInterval))
@@ -122,8 +132,13 @@ final class DataCollectionManager {
                 let gap = now.timeIntervalSince(previous)
                 previous = now
 
-                // Exercise the network the same way the airline poll would.
-                let net = await Self.probeNetwork()
+                // Exercise the network the same way the airline poll would,
+                // but only occasionally — see networkProbeEverySamples.
+                sampleIndex += 1
+                let shouldProbe = sampleIndex % Self.networkProbeEverySamples == 1
+                let net = shouldProbe
+                    ? await Self.probeNetwork()
+                    : (ok: true, ms: 0.0, error: "skipped")
 
                 #if os(iOS)
                 let state = await MainActor.run { () -> String in

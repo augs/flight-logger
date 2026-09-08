@@ -131,8 +131,35 @@ final class RuuviTagScanner: NSObject {
     /// Count of raw NUS TX notifications seen this sync, for diagnostics.
     private var rawFrameCount = 0
 
-    private var historyPeripheral: CBPeripheral?
-    private var historyRXChar: CBCharacteristic?
+    // MARK: - Persistent link
+    //
+    // The tag streams DF5 heartbeats (~2s) over NUS while connected. That is
+    // both finer than advertisement scanning manages in the foreground and,
+    // unlike scanning, a delivery path iOS supports for backgrounded apps —
+    // Apple: "While your app is in the background you can still discover and
+    // connect to peripherals, and explore and interact with peripheral data."
+    // So we hold one connection for the session rather than connecting per
+    // sync, and let the tag's own stream drive readings.
+    //
+    // Cost: the tag has a single connection slot, so holding it locks out
+    // Ruuvi Station for the duration of a recording.
+
+    private var linkPeripheral: CBPeripheral?
+    private var linkRX: CBCharacteristic?
+    /// True once NUS notifications are live and requests can be written.
+    private(set) var linkReady = false
+    /// Whether we want a link at all — false outside a recording session.
+    private var wantsLink = false
+
+    /// Heartbeats arrive every ~2s and advertisements every ~5s — both far
+    /// finer than a flight profile needs, and every stored row is a SwiftData
+    /// write. Persist at most one reading per this interval regardless of
+    /// source. At 2s unthrottled this would be ~1800 writes/hour.
+    private var lastRecordedAt: Date?
+    static let readingRecordInterval: TimeInterval = 60
+
+    /// Set when a log read is requested before the link is ready.
+    private var pendingHistorySince: Date?
     private var historySamples: [RuuviHistoryProtocol.Sample] = []
     private var historySince: Date = .distantPast
     private var historyCompletion: ((Int) -> Void)?
@@ -181,11 +208,15 @@ final class RuuviTagScanner: NSObject {
             return
         }
 
+        wantsLink = true
+        lastRecordedAt = nil
         beginScan()
+        openLink()
     }
 
     func stopScanning() {
         centralManager?.stopScan()
+        closeLink()
         // Don't nil centralManager — it must persist for background BLE delivery
         flightSession = nil
         modelContext = nil
@@ -194,20 +225,69 @@ final class RuuviTagScanner: NSObject {
         logger.info("Scanning stopped")
     }
 
+    // MARK: - Link lifecycle
+
+    /// Open (or reopen) the persistent connection to the tag.
+    ///
+    /// Uses `retrievePeripherals(withIdentifiers:)` so no scan is needed — the
+    /// only way this can work in the background, where scanning delivers
+    /// nothing for this tag.
+    private func openLink() {
+        guard wantsLink, linkPeripheral == nil,
+              let cm = centralManager, cm.state == .poweredOn else { return }
+
+        guard let known = knownTagIdentifier,
+              let peripheral = cm.retrievePeripherals(withIdentifiers: [known]).first else {
+            // Never seen the tag, so it has to be discovered first. Foreground
+            // only; beginScan() is already running and didDiscover will call
+            // back here once it learns the identifier.
+            logger.info("No known tag yet — waiting for discovery before linking")
+            return
+        }
+
+        linkPeripheral = peripheral
+        peripheral.delegate = self
+        // iOS 17+: the system reconnects on its own after a drop and wakes us
+        // via didConnect, so no reconnect timer of our own is needed.
+        cm.connect(peripheral, options: [
+            CBConnectPeripheralOptionEnableAutoReconnect: true
+        ])
+        logger.info("Linking to \(peripheral.name ?? "RuuviTag") (auto-reconnect)")
+    }
+
+    private func closeLink() {
+        wantsLink = false
+        linkReady = false
+        pendingHistorySince = nil
+        if let peripheral = linkPeripheral {
+            // Also cancels any auto-reconnect the system has pending.
+            centralManager?.cancelPeripheralConnection(peripheral)
+        }
+        linkPeripheral = nil
+        linkRX = nil
+    }
+
     // MARK: - Scanning
 
     private func beginScan() {
         guard let cm = centralManager, cm.state == .poweredOn else { return }
         guard flightSession != nil else { return }
 
+        // The link is the primary data source; scanning only bridges the gap
+        // before it comes up (and is the only way to learn the tag identifier
+        // the first time). Skip it entirely once linked — the tag stops
+        // advertising while connected, so it would be pure radio waste.
+        guard !linkReady else { return }
+
         // Must be nil: the tag advertises no service UUIDs, so any filter
         // matches nothing. Consequence — this only works in the foreground,
         // where iOS permits unfiltered scans. See DESIGN.md.
-        cm.scanForPeripherals(withServices: nil, options: [
-            CBCentralManagerScanOptionAllowDuplicatesKey: true
-        ])
+        //
+        // allowDuplicates is deliberately off: we throttle to one reading a
+        // minute anyway, and duplicate delivery is a documented battery cost.
+        cm.scanForPeripherals(withServices: nil, options: nil)
         status = .scanning
-        logger.info("Scanning for RuuviTags (unfiltered)")
+        logger.info("Scanning for RuuviTags (unfiltered, fallback)")
     }
 
     // MARK: - RAWv2 (Data Format 5) Parsing
@@ -245,12 +325,23 @@ final class RuuviTagScanner: NSObject {
         return (temperature, humidity, pressure)
     }
 
-    /// Record a sensor reading from parsed data.
+    /// Record a sensor reading from parsed data, throttled to one row per
+    /// `readingRecordInterval` regardless of source.
     private func recordReading(_ parsed: (temperature: Double, humidity: Double, pressure: Double), from peripheralName: String?) {
         guard let session = flightSession, let context = modelContext else {
             logger.warning("BLE data received but no active session")
             return
         }
+
+        if let last = lastRecordedAt,
+           Date().timeIntervalSince(last) < Self.readingRecordInterval {
+            // Still counts as liveness — the tag is being heard from — but not
+            // worth a disk write.
+            lastReading = Date()
+            status = .found(name: peripheralName ?? "RuuviTag")
+            return
+        }
+        lastRecordedAt = Date()
 
         let reading = SensorReading(
             temperatureCelsius: parsed.temperature,
@@ -290,20 +381,14 @@ final class RuuviTagScanner: NSObject {
 
     // MARK: - History Sync
 
-    /// Download the tag's onboard log and merge it into the active session.
+    /// Request the tag's onboard log and merge it into the active session.
     ///
-    /// This connects to the tag, which stops it advertising — so live scanning
-    /// is suspended for the duration and resumed afterwards.
+    /// Issued over the persistent link rather than a connection of its own. If
+    /// the link isn't ready yet the request is queued and sent as soon as
+    /// notifications come up.
     ///
-    /// Works in the background, unlike live scanning. Once we've seen the tag
-    /// even once, its identifier is remembered and
-    /// `retrievePeripherals(withIdentifiers:)` gives us a peripheral to connect
-    /// to directly — no scan required. That matters because background scans
-    /// deliver nothing for this tag (see DESIGN.md), so a scan-based sync could
-    /// only ever have worked in the foreground.
-    ///
-    /// Requires the tag's single connection slot to be free; if another app
-    /// (typically Ruuvi Station) holds it, this fails rather than hanging.
+    /// Requires the tag's single connection slot; if another app (typically
+    /// Ruuvi Station) holds it, the link never establishes and this times out.
     func syncHistory(since: Date, completion: ((Int) -> Void)? = nil) {
         guard let cm = centralManager, cm.state == .poweredOn else {
             completion?(0)
@@ -322,10 +407,6 @@ final class RuuviTagScanner: NSObject {
         historyState = .connecting
         historyStarted = Date()
         historyTrace = ""
-        wasScanningBeforeSync = (status == .scanning || isFound(status))
-
-        // Suspend live scanning — a connection would silently kill it anyway.
-        cm.stopScan()
 
         historyTimeout = Task { [weak self] in
             try? await Task.sleep(for: .seconds(Self.historyTimeoutSeconds))
@@ -333,18 +414,15 @@ final class RuuviTagScanner: NSObject {
             self?.finishHistorySync(error: "Timed out — is another app connected to the tag?")
         }
 
-        // Preferred path: connect to the remembered tag without scanning.
-        if let known = knownTagIdentifier,
-           let peripheral = cm.retrievePeripherals(withIdentifiers: [known]).first {
-            trace("retrieved")
-            connectForHistory(peripheral)
-            return
+        if linkReady {
+            trace("link-ready")
+            sendHistoryRequest()
+        } else {
+            // Link will carry it once notifications are live.
+            trace("awaiting-link")
+            pendingHistorySince = since
+            openLink()
         }
-
-        // Fallback: we've never seen the tag, so we have to discover it first.
-        // Only viable in the foreground.
-        cm.scanForPeripherals(withServices: nil, options: nil)
-        trace("scanning")
     }
 
     /// Manually trigger a sync for the whole active session. Exposed for the
@@ -357,42 +435,25 @@ final class RuuviTagScanner: NSObject {
         syncHistory(since: session.recordingStartedAt, completion: completion)
     }
 
-    private func isFound(_ status: ScanStatus) -> Bool {
-        if case .found = status { return true }
-        return false
+    private func sendHistoryRequest() {
+        guard let peripheral = linkPeripheral, let rx = linkRX else { return }
+        pendingHistorySince = nil
+        historyState = .downloading(frames: 0)
+
+        let request = RuuviHistoryProtocol.logReadRequest(since: historySince)
+        let hex = request.map { String(format: "%02X", $0) }.joined(separator: " ")
+        logger.info("History request bytes: \(hex, privacy: .public)")
+        peripheral.writeValue(request, for: rx, type: .withResponse)
     }
 
-    private func beginHistoryConnection(to peripheral: CBPeripheral, connectable: Bool) {
-        guard historyState == .connecting, historyPeripheral == nil else { return }
-
-        // Verified against hardware: while another central holds the tag's
-        // single connection slot it advertises non-connectable, and `connect`
-        // then hangs silently until timeout rather than failing. Fail fast with
-        // something the user can act on.
-        guard connectable else {
-            finishHistorySync(error: "Tag is busy — another app (e.g. Ruuvi Station) is connected to it")
-            return
-        }
-
-        connectForHistory(peripheral)
-    }
-
-    private func connectForHistory(_ peripheral: CBPeripheral) {
-        historyPeripheral = peripheral
-        peripheral.delegate = self
-        centralManager?.stopScan()
-        centralManager?.connect(peripheral, options: nil)
-        logger.info("History sync: connecting to \(peripheral.name ?? "RuuviTag")")
-    }
-
-    /// Persist assembled entries, then tear down and resume live scanning.
+    /// Persist whatever arrived and reset sync state. The link is left open.
     private func finishHistorySync(error: String? = nil) {
         historyTimeout?.cancel()
         historyTimeout = nil
+        pendingHistorySince = nil
 
         var saved = 0
         if let error {
-            historyState = .failed(error)
             lastSyncResult = .failed(reason: error, at: Date())
             logger.error("History sync failed: \(error, privacy: .public)")
         } else {
@@ -400,13 +461,7 @@ final class RuuviTagScanner: NSObject {
             lastSyncResult = .merged(count: saved, at: Date())
         }
 
-        if let peripheral = historyPeripheral {
-            centralManager?.cancelPeripheralConnection(peripheral)
-        }
-        historyPeripheral = nil
-        historyRXChar = nil
         historySamples = []
-
         // Always return to .idle, including after a failure — otherwise the
         // `guard historyState == .idle` in syncHistory would block every future
         // retry. The failure is preserved in `lastSyncResult` instead.
@@ -414,20 +469,11 @@ final class RuuviTagScanner: NSObject {
 
         let completion = historyCompletion
         historyCompletion = nil
-
-        // Always resume live scanning if a session is still active. Gating this
-        // on `wasScanningBeforeSync` could leave the app silently not scanning
-        // after a sync, which looks exactly like a hung scan to the user.
-        wasScanningBeforeSync = false
-        if flightSession != nil {
-            beginScan()
-        }
-
         completion?(saved)
     }
 
     /// Merge downloaded entries into the session, skipping timestamps we
-    /// already have from advertisements.
+    /// already have from heartbeats or advertisements.
     private func persistHistory() -> Int {
         guard let session = flightSession, let context = modelContext else { return 0 }
 
@@ -435,9 +481,9 @@ final class RuuviTagScanner: NSObject {
             .filter { $0.timestamp >= historySince }
         guard !entries.isEmpty else { return 0 }
 
-        // Advertisement-derived readings and log entries will overlap. Dedupe
-        // on whole seconds — the tag logs at fixed intervals, so exact-match
-        // timestamps are the right granularity.
+        // Live readings and log entries will overlap. Dedupe on whole seconds —
+        // the tag logs at fixed intervals, so exact-match timestamps are the
+        // right granularity.
         let existing = Set(session.sensorReadings.map { Int($0.timestamp.timeIntervalSince1970) })
 
         var inserted = 0
@@ -477,6 +523,15 @@ extension RuuviTagScanner: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
         logger.info("CoreBluetooth state restored")
         centralManager = central
+
+        // Reclaim a connection the system restored on our behalf, so the link
+        // isn't abandoned after the app is relaunched mid-session.
+        if let restored = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral],
+           let peripheral = restored.first {
+            linkPeripheral = peripheral
+            peripheral.delegate = self
+            logger.info("Restored link to \(peripheral.name ?? "RuuviTag")")
+        }
     }
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
@@ -484,8 +539,10 @@ extension RuuviTagScanner: CBCentralManagerDelegate {
         switch central.state {
         case .poweredOn:
             beginScan()
+            openLink()
         case .poweredOff:
             status = .bluetoothOff
+            linkReady = false
         case .unauthorized:
             status = .unauthorized
         default:
@@ -514,17 +571,12 @@ extension RuuviTagScanner: CBCentralManagerDelegate {
 
         ruuviDiscoveryCount += 1
 
-        // Remember the tag so a later sync can connect without scanning.
+        // Remember the tag so the link can be opened without scanning — the
+        // only route that works in the background.
         if knownTagIdentifier != peripheral.identifier {
             knownTagIdentifier = peripheral.identifier
             logger.info("Remembered RuuviTag \(peripheral.identifier, privacy: .public)")
-        }
-
-        // In history mode we're hunting for a tag to connect to, not logging.
-        if historyState == .connecting {
-            let connectable = (advertisementData[CBAdvertisementDataIsConnectable] as? NSNumber)?.boolValue ?? false
-            beginHistoryConnection(to: peripheral, connectable: connectable)
-            return
+            openLink()
         }
 
         let payload = manufacturerData.dropFirst(2)
@@ -534,37 +586,61 @@ extension RuuviTagScanner: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        guard peripheral === historyPeripheral else { return }
-        historyState = .downloading(frames: 0)
+        guard peripheral === linkPeripheral else { return }
         trace("connected")
+        logger.info("Link connected — discovering NUS")
+        // The tag stops advertising while connected, so scanning can only waste
+        // radio time from here.
+        central.stopScan()
         peripheral.discoverServices([Self.nusServiceUUID])
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: (any Error)?) {
-        guard peripheral === historyPeripheral else { return }
-        finishHistorySync(error: error?.localizedDescription ?? "Connection failed")
+        guard peripheral === linkPeripheral else { return }
+        logger.error("Link failed: \(error?.localizedDescription ?? "unknown", privacy: .public)")
+        linkReady = false
+        if historyState != .idle {
+            finishHistorySync(error: error?.localizedDescription ?? "Could not connect to tag")
+        }
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: (any Error)?) {
-        guard peripheral === historyPeripheral else { return }
+        guard peripheral === linkPeripheral else { return }
+        linkReady = false
+        linkRX = nil
+        logger.info("Link dropped: \(error?.localizedDescription ?? "clean", privacy: .public)")
+
         // A disconnect mid-download ends the sync; whatever arrived is kept.
         if case .downloading = historyState {
             finishHistorySync()
         }
+
+        if wantsLink {
+            // Auto-reconnect means the system retries on its own; fall back to
+            // advertisement scanning meanwhile so the foreground keeps data.
+            beginScan()
+        } else {
+            // Cancel again to clear any auto-reconnect the system has pending.
+            central.cancelPeripheralConnection(peripheral)
+            linkPeripheral = nil
+        }
     }
 }
 
-// MARK: - CBPeripheralDelegate (history sync only)
+// MARK: - CBPeripheralDelegate
 
 extension RuuviTagScanner: CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: (any Error)?) {
         if let error {
-            finishHistorySync(error: error.localizedDescription)
+            logger.error("Service discovery failed: \(error.localizedDescription, privacy: .public)")
+            if historyState != .idle { finishHistorySync(error: error.localizedDescription) }
             return
         }
         guard let service = peripheral.services?.first(where: { $0.uuid == Self.nusServiceUUID }) else {
-            finishHistorySync(error: "Tag has no NUS service — history unsupported on this firmware")
+            if historyState != .idle {
+                finishHistorySync(error: "Tag has no NUS service — unsupported firmware")
+            }
             return
         }
         trace("services")
@@ -573,34 +649,37 @@ extension RuuviTagScanner: CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: (any Error)?) {
         if let error {
-            finishHistorySync(error: error.localizedDescription)
+            logger.error("Characteristic discovery failed: \(error.localizedDescription, privacy: .public)")
+            if historyState != .idle { finishHistorySync(error: error.localizedDescription) }
             return
         }
         guard let rx = service.characteristics?.first(where: { $0.uuid == Self.nusRXCharUUID }),
               let tx = service.characteristics?.first(where: { $0.uuid == Self.nusTXCharUUID }) else {
-            finishHistorySync(error: "NUS characteristics not found")
+            if historyState != .idle { finishHistorySync(error: "NUS characteristics not found") }
             return
         }
-        historyRXChar = rx
+        linkRX = rx
         trace("chars")
-        // The log request goes out only once notifications are actually live,
-        // otherwise the reply stream is missed.
+        // Heartbeats and any log reply both arrive on this subscription.
         peripheral.setNotifyValue(true, for: tx)
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: (any Error)?) {
         if let error {
-            finishHistorySync(error: error.localizedDescription)
+            logger.error("Notification subscription failed: \(error.localizedDescription, privacy: .public)")
+            if historyState != .idle { finishHistorySync(error: error.localizedDescription) }
             return
         }
-        guard characteristic.isNotifying, let rx = historyRXChar else { return }
+        guard characteristic.isNotifying else { return }
 
+        linkReady = true
         trace("notifying")
-        let request = RuuviHistoryProtocol.logReadRequest(since: historySince)
-        let hex = request.map { String(format: "%02X", $0) }.joined(separator: " ")
-        logger.info("History request bytes: \(hex, privacy: .public) (peripheral state \(peripheral.state.rawValue))")
-        peripheral.writeValue(request, for: rx, type: .withResponse)
-        logger.info("History sync: requested log since \(self.historySince, privacy: .public)")
+        logger.info("Link ready — heartbeats streaming")
+        status = .found(name: peripheral.name ?? "RuuviTag")
+
+        if pendingHistorySince != nil {
+            sendHistoryRequest()
+        }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: (any Error)?) {
@@ -614,24 +693,15 @@ extension RuuviTagScanner: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: (any Error)?) {
-        // Log every notification, not just NUS TX, so "no frames" can be
-        // distinguished from "frames arriving on an unexpected characteristic".
         if let error {
             logger.error("Characteristic update error: \(error.localizedDescription, privacy: .public)")
         }
-        if characteristic.uuid != Self.nusTXCharUUID {
-            logger.info("Update on unexpected characteristic \(characteristic.uuid.uuidString, privacy: .public)")
-        }
         guard characteristic.uuid == Self.nusTXCharUUID, let data = characteristic.value else { return }
 
-        // Dump the first frames verbatim. The tag answers, but the payload was
-        // being rejected by the parser — without the raw bytes there is no way
-        // to tell a heartbeat from a malformed log frame.
         rawFrameCount += 1
-        if rawFrameCount <= 8 {
+        if rawFrameCount <= 4 {
             let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
-            let parsed = RuuviHistoryProtocol.parse(data)
-            logger.info("TX frame \(self.rawFrameCount) len=\(data.count) \(hex, privacy: .public) -> \(String(describing: parsed), privacy: .public)")
+            logger.info("TX frame \(self.rawFrameCount) len=\(data.count) \(hex, privacy: .public)")
         }
 
         switch RuuviHistoryProtocol.parse(data) {
@@ -644,13 +714,16 @@ extension RuuviTagScanner: CBPeripheralDelegate {
         case .error:
             finishHistorySync(error: "Tag reported a log-read error")
         case nil:
-            // Not a log frame. While connected the tag also streams DF5
-            // heartbeats carrying its *current* reading, ~2s apart — finer than
-            // the advertisement stream and, unlike it, delivered over the
-            // connection. Record them rather than discarding.
-            if let parsed = Self.parseRAWv2(data) {
-                recordReading(parsed, from: historyPeripheral?.name)
-            }
+            // Not a log frame: a DF5 heartbeat carrying the tag's current
+            // reading, streamed ~2s apart while connected. Throttle to the
+            // configured interval — 2s resolution is far more than a flight
+            // profile needs, and every row is a SwiftData write.
+            recordHeartbeat(data, from: peripheral.name)
         }
+    }
+
+    private func recordHeartbeat(_ data: Data, from name: String?) {
+        guard let parsed = Self.parseRAWv2(data) else { return }
+        recordReading(parsed, from: name)
     }
 }

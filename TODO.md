@@ -196,36 +196,42 @@ Store review flags.
 
 ## P2 — Session integrity
 
-### 21. Verify the persistent-link restructure on hardware — mostly verified
+### 21. ✅ Persistent-link restructure verified on hardware
 
-**Verified on device 2026-09-08:**
+68-minute locked-screen run, off charger, app backgrounded for all 65 samples,
+tag carried in and out of range several times (2026-09-08).
 
-1. ✅ Link comes up from a cold start — ready ~1s after launch.
-2. ✅ Heartbeat readings land at exactly the 60s throttle (5/5 consecutive
-   samples, gaps 60.2–60.3s), store writable throughout.
-3. ✅ History sync completes over the existing link, including a ~9 hour
-   backfill of 111 entries at 300s spacing — the idle-timeout change handles
-   long windows.
-4. ✅ No suspension across a real 40-minute commute: 39 samples, max gap 72s,
-   nothing over 90s, off charger, in a pocket.
-5. ✅ Restored connections rebuild their state (see DESIGN.md).
+| Measure | Result |
+|---|---|
+| Suspension gaps | **none** — max 64.0s against a 60s cadence, 0 over 90s |
+| Link up | 43/65 samples; the rest fell back to `scanning`, never `idle` |
+| Link drops | 3, all recovered by the 60s watchdog |
+| Reading cadence | 51 of 57 intervals on cadence (<70s) |
+| Worst data gap | 301s — a history-backfilled 5-min log entry, not a hole |
+| Store failures | 0 |
+| Self-heal firings | 0 — no `idle` status, so the teardown race did not recur |
 
-**Still unverified:**
+Conclusions:
 
-- **The link across a locked screen for a sustained period.** The commute run
-  was invalidated by the teardown race (fixed in `aa8bd23`), so this — the whole
-  point of the design — has still never been observed working. Needs a repeat
-  of the commute test.
-- **Watchdog recovery of a dropped link.** `EnableAutoReconnect` is rejected on
-  this device, so the 60s watchdog is the only recovery path and nothing has
-  ever exercised it. Walk the tag out of BLE range and back.
-- **Battery cost.** Check Settings → Battery → flight-logger after a long run.
+- **The link survives a locked screen.** This was the whole point of the design
+  and had never been observed before this run.
+- **The watchdog is sufficient** as the sole recovery path, which matters
+  because `EnableAutoReconnect` is rejected on this device.
+- **Drops degrade rather than break.** When the link goes down the scanner
+  falls back to advertisement scanning, and history sync backfills the period
+  at the tag's 5-min log resolution — so even a 16-minute outage left no gap
+  worse than 301s.
 
-**Known cosmetic issue:** two `Linking to…` log lines appear per connect. The
-`connectLink` duplicate guard checks `peripheral.state`, which has not yet
-transitioned to `.connecting` when the second call arrives in the same run loop
-turn. CoreBluetooth dedupes the requests, so this is noise rather than a defect,
-but it makes logs harder to read.
+**Battery: inconclusive, no red flag.** All 47 unplugged samples read 100%, so
+drain over 68 minutes was below measurement resolution — but the phone started
+full, and iOS holds 100% for a while after unplugging. Needs a run starting
+nearer 50% to produce a real number. (Note iOS 26 no longer breaks out per-app
+battery in Settings, which is why this is sampled in `DiagnosticSample`.)
+
+**Not separable from this data:** recovery latency. The three drops recovered
+after 4m09s, 2m03s and 16m30s, but those track how long the tag was out of
+range, not how quickly the watchdog acted once it returned. Measuring that
+needs a controlled out-and-back with known timings.
 
 ### 9. ✅ Upper bound on session duration
 

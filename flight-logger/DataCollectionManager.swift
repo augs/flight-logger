@@ -95,6 +95,10 @@ final class DataCollectionManager {
 
     /// Start collecting data for a flight session.
     func startSession(_ session: FlightSession, modelContext: ModelContext) {
+        #if os(iOS)
+        // Required before batteryLevel returns anything but -1.
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        #endif
         sessionGeneration += 1
         self.activeSession = session
         self.modelContext = modelContext
@@ -146,16 +150,29 @@ final class DataCollectionManager {
                     : (ok: true, ms: 0.0, error: "skipped")
 
                 #if os(iOS)
-                let state = await MainActor.run { () -> String in
+                let (state, battery, batteryState) = await MainActor.run { () -> (String, Double, String) in
+                    let appState: String
                     switch UIApplication.shared.applicationState {
-                    case .active: return "active"
-                    case .inactive: return "inactive"
-                    case .background: return "background"
-                    @unknown default: return "unknown"
+                    case .active: appState = "active"
+                    case .inactive: appState = "inactive"
+                    case .background: appState = "background"
+                    @unknown default: appState = "unknown"
                     }
+                    let device = UIDevice.current
+                    let level = Double(device.batteryLevel)
+                    let charge: String
+                    switch device.batteryState {
+                    case .unplugged: charge = "unplugged"
+                    case .charging: charge = "charging"
+                    case .full: charge = "full"
+                    default: charge = "unknown"
+                    }
+                    return (appState, level, charge)
                 }
                 #else
                 let state = "n/a"
+                let battery = -1.0
+                let batteryState = "n/a"
                 #endif
 
                 var storeReadable = true
@@ -184,7 +201,9 @@ final class DataCollectionManager {
                     historySyncState: String(describing: self.bleScanner.historyState),
                     historySyncResult: String(describing: self.bleScanner.lastSyncResult),
                     historySyncTrace: self.bleScanner.historyTrace,
-                    linkReady: self.bleScanner.linkReady
+                    linkReady: self.bleScanner.linkReady,
+                    batteryLevel: battery,
+                    batteryState: batteryState
                 )
                 context.insert(sample)
                 try? context.save()

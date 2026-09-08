@@ -58,6 +58,13 @@ final class DiagnosticSample {
     /// important field for verifying the link design from an unattended run.
     var linkReady: Bool = false
 
+    /// Battery level 0–1, or -1 if unavailable. iOS 26 no longer breaks out
+    /// per-app battery in Settings, so sampling it here is the only way to
+    /// measure what a session actually costs.
+    var batteryLevel: Double = -1
+    /// "unplugged", "charging", "full", or "unknown".
+    var batteryState: String = ""
+
     init(
         timestamp: Date = Date(),
         appState: String,
@@ -73,7 +80,9 @@ final class DiagnosticSample {
         historySyncState: String = "",
         historySyncResult: String = "",
         historySyncTrace: String = "",
-        linkReady: Bool = false
+        linkReady: Bool = false,
+        batteryLevel: Double = -1,
+        batteryState: String = ""
     ) {
         self.timestamp = timestamp
         self.appState = appState
@@ -90,5 +99,7 @@ final class DiagnosticSample {
         self.historySyncResult = historySyncResult
         self.historySyncTrace = historySyncTrace
         self.linkReady = linkReady
+        self.batteryLevel = batteryLevel
+        self.batteryState = batteryState
     }
 }

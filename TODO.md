@@ -196,29 +196,36 @@ Store review flags.
 
 ## P2 — Session integrity
 
-### 21. Verify the persistent-link restructure on hardware ⚠️ HIGHEST PRIORITY
+### 21. Verify the persistent-link restructure on hardware — mostly verified
 
-The move from connect-per-sync to a single held link (commit `7737e71`) changes
-the connection lifecycle substantially and has **only been compiled and unit
-tested** — it has never run against the tag. Everything downstream of it is
-therefore unproven, and today's record on unverified assumptions is poor.
+**Verified on device 2026-09-08:**
 
-Needs a device run confirming, in order:
+1. ✅ Link comes up from a cold start — ready ~1s after launch.
+2. ✅ Heartbeat readings land at exactly the 60s throttle (5/5 consecutive
+   samples, gaps 60.2–60.3s), store writable throughout.
+3. ✅ History sync completes over the existing link, including a ~9 hour
+   backfill of 111 entries at 300s spacing — the idle-timeout change handles
+   long windows.
+4. ✅ No suspension across a real 40-minute commute: 39 samples, max gap 72s,
+   nothing over 90s, off charger, in a pocket.
+5. ✅ Restored connections rebuild their state (see DESIGN.md).
 
-1. The link comes up from a cold session start and `linkReady` goes true.
-2. Heartbeat-derived readings land at the throttled 60s cadence.
-3. `EnableAutoReconnect` actually recovers a dropped link — walk the tag out of
-   range and back — without a reconnect timer of our own.
-4. History sync still completes when issued over the existing link rather than
-   its own connection.
-5. The link survives a locked screen for a sustained period. This is the whole
-   point of the design and the one thing nothing else substitutes for.
-6. Battery cost over a long run, which no amount of reasoning will settle.
+**Still unverified:**
 
-Watch for a regression specific to this design: `beginScan()` now early-returns
-when `linkReady`, so if the link comes up but heartbeats stop, the app would
-collect nothing at all rather than falling back to advertisements.
+- **The link across a locked screen for a sustained period.** The commute run
+  was invalidated by the teardown race (fixed in `aa8bd23`), so this — the whole
+  point of the design — has still never been observed working. Needs a repeat
+  of the commute test.
+- **Watchdog recovery of a dropped link.** `EnableAutoReconnect` is rejected on
+  this device, so the 60s watchdog is the only recovery path and nothing has
+  ever exercised it. Walk the tag out of BLE range and back.
+- **Battery cost.** Check Settings → Battery → flight-logger after a long run.
 
+**Known cosmetic issue:** two `Linking to…` log lines appear per connect. The
+`connectLink` duplicate guard checks `peripheral.state`, which has not yet
+transitioned to `.connecting` when the second call arrives in the same run loop
+turn. CoreBluetooth dedupes the requests, so this is noise rather than a defect,
+but it makes logs harder to read.
 
 ### 9. ✅ Upper bound on session duration
 

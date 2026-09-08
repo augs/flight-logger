@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-09-07 — NUS Heartbeat Capture (backlog #19)
+
+### Heartbeats are now recorded as readings
+- While connected over NUS the tag streams its current reading as an 18-byte
+  Data Format 5 payload — the advertisement format minus the trailing 6-byte
+  MAC. Measured cadence **1.98s**, DF5 sequence number incrementing by exactly
+  1 per frame, so nothing is dropped
+- `parseRAWv2` had been rejecting these purely on length: it guarded on size
+  but only ever reads bytes 0-6
+- Now accepts both real shapes (24 with MAC, 18 without) rather than a loose
+  minimum — a truncated 20-byte payload is neither format and is still
+  rejected. My first attempt used `>= 18` and was caught by the existing
+  `rejectsTruncatedPayload` test
+- Frames received during a sync connection are recorded as `SensorReading`s;
+  confirmed on device at a steady 2.0s spacing
+- Three tests pinned from captured hardware frames
+
+### Not done
+- The real win — continuous 2s background data — needs a **persistent**
+  connection, since heartbeats only flow while connected (~45s per 15 min
+  today). That is a design decision with real costs: it locks Ruuvi Station out
+  for the flight, spends battery, and excludes advertisement scanning entirely.
+  Whether iOS delivers GATT notifications indefinitely to a backgrounded app is
+  also still unverified
+
+---
+
 ## 2026-09-07 — History Sync Verified End-to-End on Device
 
 History sync now demonstrably works on hardware: log frames downloaded from the

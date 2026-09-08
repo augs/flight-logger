@@ -226,9 +226,18 @@ wrong. Heartbeats were arriving the whole time and being discarded, so
 `historySamples` stayed empty and the sync looked dead. Anything debugging this
 path must distinguish the two rather than counting notifications.
 
-Worth exploring: heartbeats are live readings delivered *over the connection*,
-which works in the background where advertisement scanning does not. That may be
-a better source of background live data than periodic log sync. See TODO.md #19.
+Heartbeats are now recorded as readings. Measured cadence **1.98s**, with the
+DF5 sequence number incrementing by exactly 1 per frame — no dropped
+measurements. That is finer than advertisement scanning managed even in the
+foreground, and it arrives over the **connection**, a delivery path that (unlike
+scanning) is supported for backgrounded apps.
+
+The consequence has not been exploited yet: heartbeats only flow while
+connected, i.e. during the ~45s sync window. Holding a persistent connection
+would give continuous 2s cabin data across a locked screen and supersede
+periodic history sync — but it locks Ruuvi Station out for the flight, costs
+battery, and excludes advertisement scanning (the tag stops advertising when
+connected). See TODO.md #19.
 
 ### Periodic sync is background-only
 

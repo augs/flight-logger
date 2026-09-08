@@ -212,9 +212,19 @@ final class RuuviTagScanner: NSObject {
 
     // MARK: - RAWv2 (Data Format 5) Parsing
 
-    /// Parses a RuuviTag RAWv2 manufacturer data payload.
+    /// Parses a RuuviTag RAWv2 (Data Format 5) payload.
+    ///
+    /// Accepts both lengths this app sees, verified against hardware:
+    /// - **24 bytes** — advertisement payload, MAC included.
+    /// - **18 bytes** — NUS heartbeat, identical but with the trailing 6-byte
+    ///   MAC omitted (the tag streams these while connected).
+    ///
+    /// Only bytes 0–6 are read, so the previous `>= 24` guard was rejecting
+    /// perfectly good heartbeat frames purely on length. Both exact shapes are
+    /// matched rather than a loose minimum, so a truncated payload — which is
+    /// neither format — is still rejected.
     static func parseRAWv2(_ data: Data) -> (temperature: Double, humidity: Double, pressure: Double)? {
-        guard data.count >= 24 else { return nil }
+        guard data.count == 18 || data.count >= 24 else { return nil }
 
         let bytes = [UInt8](data)
 
@@ -634,7 +644,13 @@ extension RuuviTagScanner: CBPeripheralDelegate {
         case .error:
             finishHistorySync(error: "Tag reported a log-read error")
         case nil:
-            break  // unrecognized frame — ignore
+            // Not a log frame. While connected the tag also streams DF5
+            // heartbeats carrying its *current* reading, ~2s apart — finer than
+            // the advertisement stream and, unlike it, delivered over the
+            // connection. Record them rather than discarding.
+            if let parsed = Self.parseRAWv2(data) {
+                recordReading(parsed, from: historyPeripheral?.name)
+            }
         }
     }
 }

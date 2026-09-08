@@ -237,21 +237,39 @@ remembers the tag's identifier and uses
 The data watermark only advances on success, so a failed sync re-requests the
 same window instead of losing it.
 
-### 19. Investigate NUS heartbeat frames as a background live-data source
+### 19. ✅ (investigated) NUS heartbeat frames — partially implemented
 
-Verified on device: while connected over NUS, the tag continuously streams
-18-byte Data Format 5 heartbeat frames carrying its *current* reading, alongside
-any log frames. These arrive over the **connection**, so unlike advertisement
-scanning they should work while backgrounded.
+**Verified on hardware.** While connected over NUS the tag streams its current
+reading as an 18-byte Data Format 5 payload — the advertisement format minus
+the trailing 6-byte MAC. Measured cadence **1.98s**, with the DF5 sequence
+number incrementing by exactly 1 each frame (no dropped measurements).
 
-If that holds, holding a connection during a flight could give live background
-data at the tag's broadcast rate rather than its ~5 min log cadence — a large
-resolution win over periodic history sync.
+`parseRAWv2` was rejecting these purely on length: it guards on size but only
+ever reads bytes 0-6. Now accepts both real shapes (24 with MAC, 18 without)
+while still rejecting truncated payloads, which a loose `>= 18` would not.
 
-Open questions: battery cost of a persistent connection; whether it blocks
-Ruuvi Station entirely for the flight; whether iOS keeps delivering
-notifications indefinitely in the background. The parser currently discards
-these frames (`parse` returns nil for non-log sources).
+Done: heartbeats received during a sync connection are recorded as
+`SensorReading`s. Confirmed on device at a steady 2.0s spacing.
+
+**Not done — the actual win needs a decision.** Heartbeats only flow while
+connected, which today means the ~45s sync window every 15 min. Capturing
+continuous background cabin data at 2s resolution requires holding a
+**persistent connection** for the flight. That is a real design change, not a
+tweak:
+
+- Unverified: whether iOS keeps delivering GATT notifications indefinitely to a
+  backgrounded app. Plausible — notification delivery is a supported background
+  path, unlike scanning — but everything else assumed today has needed checking.
+- Battery cost of a persistent BLE connection over a long-haul flight.
+- The tag has one connection slot, so holding it locks out Ruuvi Station for
+  the entire flight.
+- Live scanning and a held connection are mutually exclusive (the tag stops
+  advertising when connected), so this replaces the advertisement path rather
+  than supplementing it.
+
+If it works backgrounded, it supersedes periodic history sync as the primary
+source: 2s resolution versus ~5 min, and no gap across a locked screen. History
+sync would remain as the backfill for anything missed.
 
 ### 18. Consider lowering the tag's log interval
 

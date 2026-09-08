@@ -46,8 +46,12 @@ struct RAWv2ParsingTests {
     }
 
     @Test func rejectsTruncatedPayload() {
-        let short = Self.validVector.prefix(20)
-        #expect(RuuviTagScanner.parseRAWv2(Data(short)) == nil)
+        // 20 bytes is neither shape the tag emits: 24 (advertisement, with MAC)
+        // nor 18 (NUS heartbeat, without). A loose `>= 18` guard would wrongly
+        // accept this.
+        #expect(RuuviTagScanner.parseRAWv2(Data(Self.validVector.prefix(20))) == nil)
+        #expect(RuuviTagScanner.parseRAWv2(Data(Self.validVector.prefix(17))) == nil)
+        #expect(RuuviTagScanner.parseRAWv2(Data(Self.validVector.prefix(23))) == nil)
     }
 }
 
@@ -269,5 +273,55 @@ struct RuuviHardwareCaptureTests {
         let entries = RuuviHistoryProtocol.assemble(samples)
         #expect(entries.count == 2)
         #expect(entries[1].timestamp.timeIntervalSince(entries[0].timestamp) == 301)
+    }
+}
+
+// MARK: - NUS heartbeat frames (captured from hardware 2026-09-07)
+
+/// While connected over NUS the tag streams its current reading as an 18-byte
+/// Data Format 5 payload — the advertisement format minus the trailing 6-byte
+/// MAC. These were previously rejected on length alone.
+struct RuuviHeartbeatTests {
+
+    static func bytes(_ s: String) -> Data {
+        Data(s.split(separator: " ").map { UInt8($0, radix: 16)! })
+    }
+
+    @Test func parsesCapturedHeartbeatFrames() throws {
+        let captured: [(hex: String, degC: Double, rh: Double, hPa: Double)] = [
+            ("05 11 95 56 82 C5 71 FF EC 02 CC FD 44 AC B6 79 E7 29", 22.50, 55.365, 1005.45),
+            ("05 11 9E 56 8F C5 73 FF E8 02 CC FD 3C AC B6 79 E7 2A", 22.55, 55.3975, 1005.47),
+            ("05 11 98 56 8B C5 75 FF EC 02 CC FD 48 AC B6 79 E7 2B", 22.52, 55.3875, 1005.49),
+        ]
+
+        for entry in captured {
+            let data = Self.bytes(entry.hex)
+            #expect(data.count == 18)
+
+            let parsed = try #require(
+                RuuviTagScanner.parseRAWv2(data),
+                "18-byte heartbeat must parse; a >= 24 length guard silently dropped these"
+            )
+            #expect(abs(parsed.temperature - entry.degC) < 0.005)
+            #expect(abs(parsed.humidity - entry.rh) < 0.005)
+            #expect(abs(parsed.pressure - entry.hPa) < 0.005)
+        }
+    }
+
+    /// A heartbeat must not be mistaken for a log frame, and vice versa.
+    @Test func heartbeatIsNotALogFrame() {
+        let heartbeat = Self.bytes("05 11 95 56 82 C5 71 FF EC 02 CC FD 44 AC B6 79 E7 29")
+        #expect(RuuviHistoryProtocol.parse(heartbeat) == nil)
+
+        // ...and a log frame is not valid DF5: byte 0 is the destination
+        // endpoint 0x3A, not the 0x05 format marker.
+        let logFrame = Self.bytes("3A 31 10 6A 9F 6C 5B 00 00 15 AB")
+        #expect(RuuviTagScanner.parseRAWv2(logFrame) == nil)
+    }
+
+    /// Still parses full-length advertisement payloads.
+    @Test func stillParsesFullAdvertisementPayload() throws {
+        let parsed = try #require(RuuviTagScanner.parseRAWv2(RAWv2ParsingTests.validVector))
+        #expect(abs(parsed.temperature - 24.3) < 0.001)
     }
 }

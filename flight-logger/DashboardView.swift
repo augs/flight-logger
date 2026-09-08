@@ -140,7 +140,14 @@ struct DashboardView: View {
         HStack(spacing: 8) {
             switch manager.bleScanner.status {
             case .idle:
-                EmptyView()
+                // Idle while recording means nothing is being collected. This
+                // rendered as EmptyView before, so a 40-minute collection
+                // outage looked identical to a healthy dashboard.
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                Text("Sensor collection stopped — recovering…")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.red)
             case .scanning:
                 ProgressView()
                     .controlSize(.small)

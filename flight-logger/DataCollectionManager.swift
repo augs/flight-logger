@@ -61,6 +61,10 @@ final class DataCollectionManager {
     /// When we last *attempted* a sync, successful or not.
     private var lastSyncAttempt: Date?
 
+    /// Incremented on every session start. Deferred work captured from a
+    /// previous session compares against this before touching shared state.
+    private var sessionGeneration = 0
+
     private let logger = Logger(subsystem: "org.pbx.flight-logger", category: "Collection")
 
     #if os(iOS)
@@ -91,6 +95,7 @@ final class DataCollectionManager {
 
     /// Start collecting data for a flight session.
     func startSession(_ session: FlightSession, modelContext: ModelContext) {
+        sessionGeneration += 1
         self.activeSession = session
         self.modelContext = modelContext
 
@@ -185,9 +190,17 @@ final class DataCollectionManager {
                 try? context.save()
 
                 self.enforceSessionLimit(session)
-                // Watchdog: auto-reconnect handles ordinary drops, but if the
-                // link never came up (tag out of range at session start, or
-                // CoreBluetooth not yet aware of it) nothing else would retry.
+                // Self-heal: if the scanner is idle while a session is active,
+                // it is not collecting at all and nothing else will notice. A
+                // teardown race left the app in exactly this state for 40
+                // minutes in the field, so re-arm rather than trusting that it
+                // can't happen again.
+                if self.bleScanner.status == .idle {
+                    self.logger.error("Scanner idle during an active session — re-arming")
+                    self.bleScanner.startScanning(flightSession: session, modelContext: context)
+                }
+                // Watchdog: auto-reconnect is rejected on this device, so the
+                // link has nothing but this to bring it back after a drop.
                 self.bleScanner.openLink()
                 self.syncHistoryIfDue(session, appState: state)
 
@@ -295,12 +308,24 @@ final class DataCollectionManager {
             return
         }
 
-        // Pull the tag's own log to backfill anything the advertisement stream
-        // missed, before releasing the scanner's session reference. The scanner
-        // holds its own refs, so this can finish after the UI has moved on.
+        // Pull the tag's own log to backfill anything live collection missed.
+        // This completes long after stopSession returns, so it must not tear
+        // down a scanner that a *newer* session has since configured.
+        //
+        // Observed in the field: stopping one session and immediately starting
+        // another left the app permanently not collecting for 40 minutes,
+        // because the old session's completion nilled the scanner's
+        // flightSession and cleared wantsLink after the new session had already
+        // armed them. Nothing recovered it short of relaunching.
+        let generation = sessionGeneration
         bleScanner.syncHistory(since: session.recordingStartedAt) { [weak self] merged in
-            self?.logger.info("Session ended — merged \(merged) history entries")
-            self?.bleScanner.stopScanning()
+            guard let self else { return }
+            self.logger.info("Session ended — merged \(merged) history entries")
+            guard self.sessionGeneration == generation else {
+                self.logger.info("A newer session started; leaving the scanner alone")
+                return
+            }
+            self.bleScanner.stopScanning()
         }
     }
 

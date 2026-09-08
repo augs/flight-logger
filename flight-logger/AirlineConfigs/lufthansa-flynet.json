@@ -1,0 +1,15 @@
+{
+  "airline": "Lufthansa FlyNet",
+  "url": "https://www.lufthansa-flynet.com/fapi/flightData",
+  "fields": {
+    "flightNumber": "flightNumber",
+    "origin": "orig.code",
+    "destination": "dest.code",
+    "altitudeFt": "altitude",
+    "groundSpeedMPH": "groundSpeed",
+    "onGround": "weightOnWheels",
+    "aircraftModel": "aircraftType",
+    "flightStatus": "flightPhase",
+    "speedUnit": "knots"
+  }
+}

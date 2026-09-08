@@ -2,8 +2,17 @@
   "airline": "Panasonic Avionics",
   "url": "https://services.inflightpanasonic.aero/inflight/services/flightdata/v2/flightdata",
   "fields": {
+    "flightNumber": "flight_number",
+    "origin": "departure_iata",
+    "destination": "destination_iata",
     "altitudeFt": "altitude_feet",
     "groundSpeedMPH": "ground_speed_knots",
-    "speedUnit": "knots"
+    "airTempF": "outside_air_temp_celsius",
+    "onGround": "weight_on_wheels",
+    "aircraftModel": "tail_number",
+    "flightStatus": "flight_phase",
+    "timeRemainingMinutes": "time_to_destination_minutes",
+    "speedUnit": "knots",
+    "temperatureUnit": "celsius"
   }
 }

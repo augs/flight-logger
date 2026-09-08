@@ -800,3 +800,114 @@ struct ProviderUnitTests {
         }
     }
 }
+
+// MARK: - Panasonic v2, full field set
+
+/// Corrects an earlier wrong conclusion. The Panasonic config was first built
+/// from microG's parser, which reads only latitude/longitude/speed/altitude
+/// because it is a *location* provider — and I inferred from its silence that
+/// Panasonic exposes no flight number or on-ground flag. It exposes both.
+/// Absence in a narrow consumer is not absence in the API.
+struct PanasonicV2Tests {
+
+    static let fields = AirlineConfig.FieldMappings(
+        flightNumber: "flight_number",
+        origin: "departure_iata",
+        destination: "destination_iata",
+        altitudeFt: "altitude_feet",
+        groundSpeedMPH: "ground_speed_knots",
+        airTempF: "outside_air_temp_celsius",
+        onGround: "weight_on_wheels",
+        aircraftModel: "tail_number",
+        flightStatus: "flight_phase",
+        scheduledDepartureTimeLocal: nil,
+        scheduledArrivalTimeLocal: nil,
+        timeRemainingMinutes: "time_to_destination_minutes",
+        altitudeUnit: nil, speedUnit: "knots", temperatureUnit: "celsius"
+    )
+
+    /// Shape per the FlightInfoV2 type in zisra/inflight-metrics.
+    static let cruising = """
+    {"weight_on_wheels":false,"ground_speed_knots":488,"altitude_feet":35000,
+     "outside_air_temp_celsius":-51,"flight_number":"LH441","departure_iata":"FRA",
+     "destination_iata":"IAH","destination_icao":"KIAH","departure_icao":"EDDF",
+     "tail_number":"D-AIHK","flight_phase":"Cruise",
+     "time_to_destination_minutes":312,"distance_to_destination_nautical_miles":4100,
+     "current_coordinates":{"latitude":51.2,"longitude":-2.4}}
+    """
+
+    static func json(_ raw: String) throws -> [String: Any] {
+        try #require(JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
+    }
+
+    @Test func extractsEveryFieldIncludingFlightNumberAndOnGround() throws {
+        let reading = AirlineResponseParser.parse(json: try Self.json(Self.cruising), fields: Self.fields)
+
+        #expect(reading.flightNumber == "LH441")
+        #expect(reading.origin == "FRA")
+        #expect(reading.destination == "IAH")
+        #expect(reading.aircraftModel == "D-AIHK")
+        #expect(reading.flightStatus == "Cruise")
+        #expect(reading.altitudeFt == 35000)
+        #expect(reading.timeRemainingMinutes == 312)
+        #expect(reading.onGround == false)
+
+        // knots -> MPH, and Celsius -> Fahrenheit.
+        #expect(abs(try #require(reading.groundSpeedMPH) - 561.6) < 0.5)
+        #expect(abs(try #require(reading.airTempF) - -59.8) < 0.1)
+    }
+
+    /// weight_on_wheels is the landing signal, so auto-stop works for every
+    /// Panasonic-backed carrier — which is most of the list microG maps.
+    @Test func weightOnWheelsDrivesAutoStop() throws {
+        let landed = Self.cruising.replacingOccurrences(
+            of: "\"weight_on_wheels\":false", with: "\"weight_on_wheels\":true")
+        let reading = AirlineResponseParser.parse(json: try Self.json(landed), fields: Self.fields)
+        #expect(reading.onGround == true)
+    }
+
+    /// The type declares outside_air_temp_celsius as nullable; a null must not
+    /// become 32°F via a zero.
+    @Test func nullTemperatureStaysAbsent() throws {
+        let noTemp = Self.cruising.replacingOccurrences(
+            of: "\"outside_air_temp_celsius\":-51", with: "\"outside_air_temp_celsius\":null")
+        let reading = AirlineResponseParser.parse(json: try Self.json(noTemp), fields: Self.fields)
+        #expect(reading.airTempF == nil)
+        #expect(reading.altitudeFt == 35000)   // the rest still parses
+    }
+}
+
+// MARK: - Lufthansa FlyNet /fapi/flightData
+
+/// A second, camelCase Lufthansa shape at a different path than BoardConnect's
+/// map API — both exist in the fleet, so both are configured.
+struct LufthansaFlyNetTests {
+
+    static let fields = AirlineConfig.FieldMappings(
+        flightNumber: "flightNumber", origin: "orig.code", destination: "dest.code",
+        altitudeFt: "altitude", groundSpeedMPH: "groundSpeed",
+        airTempF: nil, onGround: "weightOnWheels",
+        aircraftModel: "aircraftType", flightStatus: "flightPhase",
+        scheduledDepartureTimeLocal: nil, scheduledArrivalTimeLocal: nil,
+        timeRemainingMinutes: nil,
+        altitudeUnit: nil, speedUnit: "knots", temperatureUnit: nil
+    )
+
+    @Test func parsesNestedOriginAndDestination() throws {
+        let raw = """
+        {"flightNumber":"LH400","flightPhase":"CRUISE","weightOnWheels":false,
+         "aircraftType":"A350-900","aircraftRegistration":"D-AIXA",
+         "orig":{"code":"FRA"},"dest":{"code":"JFK"},
+         "altitude":38000,"groundSpeed":470}
+        """
+        let json = try #require(JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
+        let reading = AirlineResponseParser.parse(json: json, fields: Self.fields)
+
+        #expect(reading.flightNumber == "LH400")
+        #expect(reading.origin == "FRA")
+        #expect(reading.destination == "JFK")
+        #expect(reading.altitudeFt == 38000)
+        #expect(reading.onGround == false)
+        #expect(abs(try #require(reading.groundSpeedMPH) - 540.9) < 0.5)
+    }
+}

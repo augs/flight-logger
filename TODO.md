@@ -565,19 +565,38 @@ stores, so adding these without unit declarations would have recorded speed
 optional `altitudeUnit` / `speedUnit` / `temperatureUnit`, converted on the way
 in and covered by tests.
 
-**Still unverified — these are derived, not captured.** The endpoints and field
-names come from other people's working code, not from responses we have seen.
-They may be stale, region-specific, or wrong in detail. What is still wanted:
+**Correction — Panasonic exposes far more than first recorded.** The initial
+config came from microG's parser, which reads only position because it is a
+*location* provider, and I wrongly inferred from its silence that the API has no
+flight number or on-ground flag. It has both. Absence in a narrow consumer is
+not absence in the API.
+
+Per the `FlightInfoV2` type in `zisra/inflight-metrics` and KDE's
+`panasonic-inflight.js`, v2 carries: `flight_number`, `departure_iata`,
+`destination_iata`, `departure_icao`, `destination_icao`, `tail_number`,
+`flight_phase`, `weight_on_wheels`, `altitude_feet`, `ground_speed_knots`,
+`outside_air_temp_celsius`, `time_to_destination_minutes`,
+`distance_to_destination_nautical_miles`, `takeoff_time_utc`,
+`estimated_arrival_time_utc`, `current_coordinates`.
+
+**`weight_on_wheels` means auto-stop works** for every Panasonic-backed carrier,
+which is most of the list above. The config now maps the full set.
+
+Also found: Lufthansa Group FlyNet runs a *second*, camelCase API at
+`/fapi/flightData` (`flightNumber`, `weightOnWheels`, `orig.code`, `dest.code`,
+`aircraftType`), distinct from BoardConnect's `/map/api/flightData`. Both exist
+in the fleet, so both are configured. Source: `southgate/inflight-wifi`.
+
+**Still derived, not captured.** Field names come from other people's working
+code, not from responses we have seen, so they may be stale or vary by fleet.
+What is still wanted:
 
 - A real capture from any flight, saved to `flight-loggerTests/Fixtures/`.
-- Whether these providers expose flight number, origin, destination and an
-  on-ground flag at all. The location-oriented feeds microG uses do not, so
-  those configs currently record altitude and speed only, and **auto-stop
-  cannot fire for them** — the 2h inactivity backstop is what ends those
-  sessions.
+- United's full field list. Its `onGround` mapping is still assumed rather than
+  observed — the documented example response does not include it.
 - The `isPortalInitialized: false` state seen in `ejcx/uwc`: the portal answers
-  200 with no `flifo` key before the flight is ready. Detection currently
-  accepts any 200, so it would latch onto a portal that has no data yet.
+  200 with no `flifo` key before the flight is ready. Detection accepts any 200,
+  so it would latch onto a portal that has no data yet.
 
 ### 13. Log export for Grafana
 

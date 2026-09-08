@@ -1,5 +1,5 @@
 {
-  "airline": "Lufthansa FlyNet",
+  "airline": "BoardConnect (map API)",
   "url": "https://www.lufthansa-flynet.com/map/api/flightData",
   "fields": {
     "altitudeFt": "altitude",

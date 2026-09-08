@@ -54,6 +54,10 @@ final class DiagnosticSample {
     /// GATT stage trace of the last sync attempt, e.g. "retrieved@0.1s connected@16.2s".
     var historySyncTrace: String = ""
 
+    /// Whether the persistent NUS link was up at sample time. The single most
+    /// important field for verifying the link design from an unattended run.
+    var linkReady: Bool = false
+
     init(
         timestamp: Date = Date(),
         appState: String,
@@ -68,7 +72,8 @@ final class DiagnosticSample {
         networkError: String = "",
         historySyncState: String = "",
         historySyncResult: String = "",
-        historySyncTrace: String = ""
+        historySyncTrace: String = "",
+        linkReady: Bool = false
     ) {
         self.timestamp = timestamp
         self.appState = appState
@@ -84,5 +89,6 @@ final class DiagnosticSample {
         self.historySyncState = historySyncState
         self.historySyncResult = historySyncResult
         self.historySyncTrace = historySyncTrace
+        self.linkReady = linkReady
     }
 }

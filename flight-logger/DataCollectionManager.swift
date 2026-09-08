@@ -178,12 +178,17 @@ final class DataCollectionManager {
                     networkError: net.error,
                     historySyncState: String(describing: self.bleScanner.historyState),
                     historySyncResult: String(describing: self.bleScanner.lastSyncResult),
-                    historySyncTrace: self.bleScanner.historyTrace
+                    historySyncTrace: self.bleScanner.historyTrace,
+                    linkReady: self.bleScanner.linkReady
                 )
                 context.insert(sample)
                 try? context.save()
 
                 self.enforceSessionLimit(session)
+                // Watchdog: auto-reconnect handles ordinary drops, but if the
+                // link never came up (tag out of range at session start, or
+                // CoreBluetooth not yet aware of it) nothing else would retry.
+                self.bleScanner.openLink()
                 self.syncHistoryIfDue(session, appState: state)
 
                 self.logger.info(

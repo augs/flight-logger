@@ -239,6 +239,38 @@ periodic history sync — but it locks Ruuvi Station out for the flight, costs
 battery, and excludes advertisement scanning (the tag stops advertising when
 connected). See TODO.md #19.
 
+### CBConnectPeripheralOptionEnableAutoReconnect is rejected — verified 2026-09-08
+
+The iOS 17+ auto-reconnect option is declared in the SDK and reads as exactly
+what this design wants, but on this device CoreBluetooth refuses the connect
+outright:
+
+    Link failed: One or more parameters were invalid. (autoReconnect=true)
+    Retrying link without auto-reconnect
+    Link connected — discovering NUS      <- immediate
+
+Isolated by retrying the same peripheral with the option removed. The code now
+drops the option on a parameter rejection and falls back.
+
+Consequence: **the 60s watchdog is load-bearing, not a safety net.** Nothing
+else re-establishes a dropped link.
+
+### Restored connections do not replay their delegate callbacks
+
+CoreBluetooth state restoration hands back a *connected* peripheral without
+calling didConnect, didDiscoverServices or didUpdateNotificationState. Two
+traps, both hit on device:
+
+- GATT calls made from `willRestoreState` are silently dropped, because it runs
+  **before** the manager reports `poweredOn`. Rediscovery must be deferred.
+- The TX characteristic is already notifying, and `setNotifyValue(true)` on an
+  already-notifying characteristic does **not** call back — so waiting for that
+  callback leaves the link permanently "not ready".
+
+Symptom if unhandled: heartbeats arrive and readings look fine, but `linkRX` is
+nil and `linkReady` is false, so history sync silently cannot issue its request
+and the diagnostics misreport the link as down.
+
 ### Periodic sync is background-only
 
 Foreground live scanning is far higher resolution (~5s) than the tag's ~5 min

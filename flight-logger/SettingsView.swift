@@ -51,6 +51,18 @@ struct SettingsView: View {
                 } footer: {
                     Text("Choose how altitude, speed, and temperature are displayed. System Default uses your device's region settings.")
                 }
+
+                Section {
+                    NavigationLink {
+                        DiagnosticsView()
+                    } label: {
+                        Label("Diagnostics", systemImage: "stethoscope")
+                    }
+                } header: {
+                    Text("Advanced")
+                } footer: {
+                    Text("Background collection health: link state, sampling gaps, storage and battery. Useful for checking whether a flight recorded cleanly.")
+                }
             }
             .navigationTitle("Settings")
         }

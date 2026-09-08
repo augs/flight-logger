@@ -85,7 +85,7 @@ struct FlightSessionRow: View {
     let session: FlightSession
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(session.displayTitle)
                     .font(.headline)
@@ -96,16 +96,80 @@ struct FlightSessionRow: View {
                         .foregroundStyle(.red)
                 }
             }
+
             if !session.routeDescription.isEmpty {
                 Text(session.routeDescription)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-            Text(session.recordingStartedAt.formatted(date: .abbreviated, time: .shortened))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+
+            HStack(spacing: 6) {
+                Text(session.recordingStartedAt.formatted(date: .abbreviated, time: .shortened))
+                if let duration = session.duration {
+                    Text("·")
+                    Text(FlightDetailView.formatDuration(duration))
+                }
+                if session.hasFlightData {
+                    Text("·")
+                    Image(systemName: "airplane").font(.caption2)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            // Without this a 20-second aborted test and a real flight look
+            // identical in the list.
+            CoverageSummary(session: session)
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// One-line verdict on whether a session actually captured usable data.
+struct CoverageSummary: View {
+    let session: FlightSession
+
+    var body: some View {
+        let coverage = session.coverage
+
+        HStack(spacing: 6) {
+            if coverage.isEmpty {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("No sensor data")
+                    .foregroundStyle(.orange)
+            } else {
+                Image(systemName: icon(for: coverage))
+                    .foregroundStyle(tint(for: coverage))
+                Text("\(coverage.readings) readings")
+                    .foregroundStyle(.secondary)
+
+                if let range = session.pressureRange, range.high - range.low >= 1 {
+                    Text("·").foregroundStyle(.secondary)
+                    Text(String(format: "%.0f–%.0f hPa", range.low, range.high))
+                        .foregroundStyle(.secondary)
+                }
+
+                // Surface the worst hole rather than an average, which would
+                // hide a single long outage inside otherwise dense data.
+                if coverage.largestGap > 600 {
+                    Text("·").foregroundStyle(.secondary)
+                    Text("gap \(FlightProfileCharts.formatSpan(coverage.largestGap))")
+                        .foregroundStyle(.orange)
+                }
+            }
+        }
+        .font(.caption2)
+    }
+
+    private func icon(for coverage: FlightSession.Coverage) -> String {
+        if coverage.largestGap > 600 { return "chart.line.downtrend.xyaxis" }
+        return coverage.liveFraction > 0.5 ? "waveform.path.ecg" : "clock.arrow.circlepath"
+    }
+
+    private func tint(for coverage: FlightSession.Coverage) -> Color {
+        if coverage.largestGap > 600 { return .orange }
+        return coverage.liveFraction > 0.5 ? .green : .secondary
     }
 }
 

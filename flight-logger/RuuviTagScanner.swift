@@ -363,7 +363,11 @@ final class RuuviTagScanner: NSObject {
 
     /// Record a sensor reading from parsed data, throttled to one row per
     /// `readingRecordInterval` regardless of source.
-    private func recordReading(_ parsed: (temperature: Double, humidity: Double, pressure: Double), from peripheralName: String?) {
+    private func recordReading(
+        _ parsed: (temperature: Double, humidity: Double, pressure: Double),
+        from peripheralName: String?,
+        source: ReadingSource
+    ) {
         guard let session = flightSession, let context = modelContext else {
             logger.warning("BLE data received but no active session")
             return
@@ -383,7 +387,8 @@ final class RuuviTagScanner: NSObject {
             temperatureCelsius: parsed.temperature,
             humidityPercent: parsed.humidity,
             pressureHPa: parsed.pressure,
-            session: session
+            session: session,
+            source: source
         )
         context.insert(reading)
 
@@ -546,7 +551,8 @@ final class RuuviTagScanner: NSObject {
                 temperatureCelsius: entry.temperatureCelsius,
                 humidityPercent: entry.humidityPercent,
                 pressureHPa: entry.pressureHPa,
-                session: session
+                session: session,
+                source: .history
             )
             context.insert(reading)
             inserted += 1
@@ -655,7 +661,7 @@ extension RuuviTagScanner: CBCentralManagerDelegate {
         let payload = manufacturerData.dropFirst(2)
         guard let parsed = Self.parseRAWv2(Data(payload)) else { return }
 
-        recordReading(parsed, from: peripheral.name)
+        recordReading(parsed, from: peripheral.name, source: .advertisement)
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
@@ -828,6 +834,6 @@ extension RuuviTagScanner: CBPeripheralDelegate {
 
     private func recordHeartbeat(_ data: Data, from name: String?) {
         guard let parsed = Self.parseRAWv2(data) else { return }
-        recordReading(parsed, from: name)
+        recordReading(parsed, from: name, source: .heartbeat)
     }
 }

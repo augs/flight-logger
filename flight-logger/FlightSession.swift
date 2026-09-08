@@ -53,7 +53,58 @@ final class FlightSession {
         self.recordingMode = recordingMode
     }
 
-    var displayTitle: String {
+    // MARK: - Quality
+
+    /// Summary of how well a session actually captured data.
+    ///
+    /// The app can log nothing at all for long stretches — a dropped tag link,
+    /// a denied permission — and until this existed the only way to find out
+    /// was to open the charts and squint, or query the store by hand. That is
+    /// the wrong time to discover a flight wasn't recorded.
+    struct Coverage {
+        let readings: Int
+        let highResolution: Int
+        let backfilled: Int
+        /// Longest interval between consecutive readings.
+        let largestGap: TimeInterval
+        /// Fraction of the session covered at better than the tag's log cadence.
+        let liveFraction: Double
+
+        var isEmpty: Bool { readings == 0 }
+    }
+
+    var coverage: Coverage {
+        let sorted = sensorReadings.sorted { $0.timestamp < $1.timestamp }
+        guard !sorted.isEmpty else {
+            return Coverage(readings: 0, highResolution: 0, backfilled: 0, largestGap: 0, liveFraction: 0)
+        }
+
+        var largestGap: TimeInterval = 0
+        for (a, b) in zip(sorted, sorted.dropFirst()) {
+            largestGap = max(largestGap, b.timestamp.timeIntervalSince(a.timestamp))
+        }
+
+        let high = sorted.filter { $0.readingSource.isHighResolution }.count
+        return Coverage(
+            readings: sorted.count,
+            highResolution: high,
+            backfilled: sorted.count - high,
+            largestGap: largestGap,
+            liveFraction: Double(high) / Double(sorted.count)
+        )
+    }
+
+    /// Range of cabin pressure seen, the most legible one-glance summary of a
+    /// flight — it tracks the cabin altitude profile directly.
+    var pressureRange: (low: Double, high: Double)? {
+        let values = sensorReadings.map(\.pressureHPa)
+        guard let low = values.min(), let high = values.max() else { return nil }
+        return (low, high)
+    }
+
+    var hasFlightData: Bool { !flightDataPoints.isEmpty }
+
+        var displayTitle: String {
         if flightNumber.isEmpty {
             return "Flight on \(recordingStartedAt.formatted(date: .abbreviated, time: .shortened))"
         }

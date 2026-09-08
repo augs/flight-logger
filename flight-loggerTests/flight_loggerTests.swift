@@ -325,3 +325,67 @@ struct RuuviHeartbeatTests {
         #expect(abs(parsed.temperature - 24.3) < 0.001)
     }
 }
+
+// MARK: - Session coverage
+
+/// Coverage is what answers "did this flight actually record?" — the question
+/// that previously required querying the store by hand.
+struct FlightSessionCoverageTests {
+
+    static func session(with readings: [(offset: TimeInterval, source: ReadingSource)]) -> FlightSession {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let session = FlightSession(recordingStartedAt: start)
+        session.sensorReadings = readings.map {
+            SensorReading(
+                timestamp: start.addingTimeInterval($0.offset),
+                temperatureCelsius: 22, humidityPercent: 55, pressureHPa: 1000,
+                source: $0.source
+            )
+        }
+        return session
+    }
+
+    @Test func emptySessionReportsNoData() {
+        let coverage = Self.session(with: []).coverage
+        #expect(coverage.isEmpty)
+        #expect(coverage.readings == 0)
+        #expect(coverage.largestGap == 0)
+    }
+
+    @Test func separatesLiveFromBackfilled() {
+        let coverage = Self.session(with: [
+            (0, .heartbeat), (60, .heartbeat), (120, .advertisement), (420, .history),
+        ]).coverage
+
+        #expect(coverage.readings == 4)
+        #expect(coverage.highResolution == 3)
+        #expect(coverage.backfilled == 1)
+        #expect(abs(coverage.liveFraction - 0.75) < 0.001)
+    }
+
+    /// The largest gap must be the worst hole, not an average — a single long
+    /// outage inside otherwise dense data is exactly what needs surfacing.
+    @Test func reportsWorstGapNotAverage() {
+        let coverage = Self.session(with: [
+            (0, .heartbeat), (60, .heartbeat), (120, .heartbeat),
+            (1320, .heartbeat),   // 20-minute outage
+            (1380, .heartbeat), (1440, .heartbeat),
+        ]).coverage
+
+        #expect(coverage.largestGap == 1200)
+        #expect(coverage.readings == 6)
+    }
+
+    @Test func readingSourceRoundTripsThroughStorage() {
+        for source in ReadingSource.allCases {
+            let reading = SensorReading(
+                temperatureCelsius: 0, humidityPercent: 0, pressureHPa: 0, source: source
+            )
+            #expect(reading.readingSource == source)
+        }
+        // Rows written before the field existed migrate to "" and must not crash.
+        let legacy = SensorReading(temperatureCelsius: 0, humidityPercent: 0, pressureHPa: 0)
+        legacy.source = ""
+        #expect(legacy.readingSource == .unknown)
+    }
+}

@@ -54,8 +54,21 @@ struct FlightDetailView: View {
                 LabeledContent("Duration", value: Self.formatDuration(duration))
             }
             LabeledContent("Mode", value: session.recordingMode)
-            LabeledContent("Sensor readings", value: "\(session.sensorReadings.count)")
             LabeledContent("Flight data points", value: "\(session.flightDataPoints.count)")
+
+            Divider()
+
+            // How the readings were obtained matters as much as how many there
+            // are: backfilled rows are 5-minute resolution, live ones a minute.
+            let coverage = session.coverage
+            LabeledContent("Sensor readings", value: "\(coverage.readings)")
+            if coverage.readings > 0 {
+                LabeledContent(ReadingSource.heartbeat.label.replacingOccurrences(of: " (linked)", with: ""),
+                               value: "\(coverage.highResolution) live · \(coverage.backfilled) backfilled")
+                LabeledContent("Largest gap",
+                               value: FlightProfileCharts.formatSpan(coverage.largestGap))
+                    .foregroundStyle(coverage.largestGap > 600 ? .orange : .primary)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()

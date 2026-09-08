@@ -78,9 +78,20 @@ The app ships with a United Airlines config. Additional airline configs can be a
 
 All data is timestamped and associated with a **Flight Session**. SwiftData models:
 
-- **FlightSession** — flight number, airline, origin, destination, departure/arrival times, aircraft model, start/end timestamps, recording mode (api-auto | manual)
-- **SensorReading** — timestamp, temperature (°C), humidity (%), pressure (hPa), session reference
+- **FlightSession** — flight number, airline, origin, destination, scheduled times, aircraft model, start/end timestamps, recording mode (api-auto | manual), plus static metadata captured once from the portal: origin/destination city, ICAO codes, departure and arrival gate and terminal, tail number, equipment code, scheduled duration, data provider, and `rawFirstResponse`
+- **SensorReading** — timestamp, temperature (°C), humidity (%), pressure (hPa), `source` (heartbeat | advertisement | history | unknown), session reference
 - **FlightDataPoint** — timestamp, altitude (ft), ground speed (MPH), outside air temp (°F), flight status string, session reference
+- **DeviceReading** — timestamp, phone barometric pressure (hPa), relative altitude (m), GPS altitude/accuracy/speed, session reference
+- **DiagnosticSample** — background-collection health: app state, sampling gap, store readability, link state, network result, battery
+
+### Why the raw payload is kept
+
+`FlightSession.rawFirstResponse` stores the first successful API response
+verbatim. Airline portals are unreachable on the ground, so a field the model
+has no column for is lost permanently once the flight lands. Keeping the payload
+means an unanticipated field can still be recovered afterwards, and it turns
+every recorded flight into a fixture for the parser tests — the only route to
+real airline coverage.
 
 Data persists locally on-device after the app is closed. iCloud backup is supported via standard iOS app backup (no explicit iCloud sync required for v1).
 

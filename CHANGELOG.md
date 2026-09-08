@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-09-08 — Airline API coverage, metadata capture, phone sensors
+
+### Airline APIs became testable, then better covered
+- `AirlineResponseParser` extracted from `AirlineAPIService`, away from
+  networking and persistence, so the polling path can be tested against
+  recorded responses instead of requiring a flight. It previously had no
+  coverage at all
+- `Tools-MockAirlineAPI.py` serves a simulated flight — climb, cruise, descent,
+  on-ground — so the temporal behaviour can be exercised. Settings gains a
+  Test API URL, probed ahead of the bundled configs
+- Six configs, up from one: United, Gogo, Panasonic, Lufthansa FlyNet,
+  BoardConnect map, UGO. Sourced from working third-party clients found via
+  GitHub code search, with provenance recorded — they are derived, not captured
+- Unit declarations added to configs. Panasonic reports knots and UGO km/h and
+  metres, so adding them without conversion would have recorded speed 15–60%
+  wrong while looking entirely plausible
+- **United has no on-ground field.** Verified against a `Codable` struct decoded
+  from a real capture: 40 fields, none of them a wheels flag. The config mapped
+  `flifo.onGround`, so United auto-stop could never have fired. Landing is now
+  detected from `flightStatus` text via `onGroundStatusValues`
+- `AIRLINE_APIS.md` records every known field for every provider, marking what
+  is mapped, what is time-series, and what is inferred rather than observed
+
+### Static metadata is no longer discarded
+- The app stored 7 metadata fields and threw away roughly 30 — gate, terminal,
+  tail number, equipment code, cities, ICAO codes, scheduled duration. These
+  are one-shot values that cannot be recovered after landing
+- `rawFirstResponse` keeps the first payload verbatim as a backstop for fields
+  with no column, and turns each flight into a test fixture
+- Scheduled departure/arrival were mapped in configs but never actually stored
+
+### Phone sensors
+- `BarometerService` records cabin pressure independently of the tag, plotted on
+  the same chart panel. Verified on device: a stable −0.8 hPa offset from the
+  tag across an 18 hPa swing, and a clean 150 m profile underground where GPS
+  produced nothing usable
+- Location fixes, previously received for the keep-alive and discarded, are now
+  logged. GPS speed proved invalid in 35/35 samples underground — expected with
+  no satellite signal, and an aircraft cabin is closer to that than to open sky
+
+### Fixes
+- `let x: String? = nil` on the config mappings would have made every field a
+  constant, omitted from both the memberwise initializer and `Decodable`. Every
+  airline config would have silently decoded as nil. Now `var`, with a test that
+  decodes rather than merely builds
+- CoreLocation's `-1` sentinels normalised to nil rather than stored as
+  measurements
+- UI tests waited on `terminate()` returning rather than the app actually
+  stopping; they now wait for `.notRunning`
+
 ## 2026-09-07 — NUS Heartbeat Capture (backlog #19)
 
 ### Heartbeats are now recorded as readings

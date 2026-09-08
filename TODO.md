@@ -7,6 +7,45 @@ Absorbs the items previously tracked in `FEATURE_REQUESTS.md`.
 
 ---
 
+## Current state — 2026-09-08
+
+Background collection is built and hardware-verified. What remains is feature
+work plus a handful of known defects, listed here so "what is broken" does not
+require reading the whole file.
+
+### Known bugs
+
+| # | Bug | Impact |
+|---|---|---|
+| B1 | Detection accepts any HTTP 200, including a portal answering `isPortalInitialized: false` with no flight data | Latches onto a portal before the flight starts and records nothing. Seen handled in `ejcx/uwc`, not by us |
+| B2 | United/Gogo landing strings (`"arrived"`, `"landed"`, `"at gate"`) are guessed, not observed | Auto-stop may never fire for United. Falls through to the 2h inactivity backstop |
+| B3 | `ugo.json` and `boardconnect-map.json` are position-only — no landing signal at all | Those sessions can only end via the 2h backstop |
+| B4 | `panasonic.json` maps no aircraft model | Panasonic exposes `tail_number` (now stored as registration) but no model name |
+| B5 | Two `Linking to …` log lines per connect | Cosmetic. `peripheral.state` has not transitioned when the second call arrives in the same run-loop turn |
+| B6 | Battery ~8%/hour with link + keep-alive + barometer | Most of a battery over a long-haul. Measured once, from full, on a train — an upper bound. See #26 |
+
+None are data-corrupting; B1–B3 all fail toward *not stopping* a recording,
+which is the safe direction.
+
+### Verified on hardware
+
+Tag link across a 68-minute locked-screen run with no suspension and three
+watchdog-recovered drops; history sync backfilling ~9 hours; the barometer
+tracking a 150 m profile underground where GPS could not; background HTTPS at
+full cadence; the store writable while locked.
+
+### Outstanding features
+
+**#13 Grafana export** · **#14 Live Activity** · **#24 Motion/turbulence
+(opt-in)** · **#25 HealthKit (opt-in)** · **#26 Battery investigation** ·
+**#27 Real airline captures**
+
+#27 is the highest-value and needs no code — one captured response from any
+flight is worth more than all the derived configs, and the app now stores the
+first payload verbatim to make that automatic.
+
+---
+
 ## P0 — Data loss bugs — ✅ DONE 2026-09-07
 
 These broke logging even in the foreground. All three are fixed; details kept
@@ -390,8 +429,7 @@ Built as `BarometerService`, converting CoreMotion's kPa to hPa so the phone's
 pressure is directly comparable with the tag's, and plotted on the *same* chart
 panel as the tag — a comparison only means anything on one scale.
 
-**Still unverified on device.** Sampling rate and whether it survives
-backgrounding as well as the location keep-alive does are both untested.
+**Verified on device** — see the measurements recorded under #22 above.
 
 ### 23. ✅ Log the location data we already collect
 
@@ -623,29 +661,25 @@ A real capture at arrival would settle it.
   200 with no `flifo` key before the flight is ready. Detection accepts any 200,
   so it would latch onto a portal that has no data yet.
 
-### 13. Log export for Grafana
 
-The parser and mock server are in place; what is missing is *data*. Only United
-has a real config, and its response shape is known from a single documented
-example rather than a capture.
+### How to add an airline
 
-The only way to get these is in the air, so the practical approach is to
-capture opportunistically and build coverage over time:
+The only way to get a real response is in the air, so capture opportunistically:
 
-- On any flight with WiFi, open the portal in the phone's browser and save the
-  JSON response before starting a session.
-- Save it under `flight-loggerTests/Fixtures/<airline>.json`, add the field
-  mappings as a config, and add a parser test asserting both the values and
-  that landing is detectable.
+1. On any flight with WiFi, open the portal in the phone's browser and save the
+   JSON before starting a session. (The app now also stores the first response
+   verbatim in `FlightSession.rawFirstResponse`, so a recorded flight yields one
+   automatically — check Settings → Diagnostics or export the session.)
+2. Save it to `flight-loggerTests/Fixtures/<airline>.json`.
+3. Write the field mappings as a config in `flight-logger/AirlineConfigs/`.
+4. Add a parser test asserting the values **and** that landing is detectable.
+   Without that second assertion, auto-stop can silently never fire.
+5. Update `AIRLINE_APIS.md` from the capture, replacing anything marked ⚠️.
 
 Deliberately **not** doing: guessing endpoints or schemas for airlines we have
-not observed. A config that looks plausible and is wrong is worse than a
-missing one — it would probe a URL that never answers, or worse, half-match and
-record nonsense. Every config in the repo should trace to a captured response.
-
-Known to exist but unverified: Panasonic Avionics and Gogo power many carriers'
-portals, so a single correct config may cover several airlines. Worth checking
-once a second real capture is available.
+not observed. A config that looks plausible and is wrong is worse than a missing
+one — it either probes a URL that never answers, or half-matches and records
+nonsense.
 
 ### 13. Log export for Grafana
 

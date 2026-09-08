@@ -196,6 +196,30 @@ Store review flags.
 
 ## P2 — Session integrity
 
+### 21. Verify the persistent-link restructure on hardware ⚠️ HIGHEST PRIORITY
+
+The move from connect-per-sync to a single held link (commit `7737e71`) changes
+the connection lifecycle substantially and has **only been compiled and unit
+tested** — it has never run against the tag. Everything downstream of it is
+therefore unproven, and today's record on unverified assumptions is poor.
+
+Needs a device run confirming, in order:
+
+1. The link comes up from a cold session start and `linkReady` goes true.
+2. Heartbeat-derived readings land at the throttled 60s cadence.
+3. `EnableAutoReconnect` actually recovers a dropped link — walk the tag out of
+   range and back — without a reconnect timer of our own.
+4. History sync still completes when issued over the existing link rather than
+   its own connection.
+5. The link survives a locked screen for a sustained period. This is the whole
+   point of the design and the one thing nothing else substitutes for.
+6. Battery cost over a long run, which no amount of reasoning will settle.
+
+Watch for a regression specific to this design: `beginScan()` now early-returns
+when `linkReady`, so if the link comes up but heartbeats stop, the app would
+collect nothing at all rather than falling back to advertisements.
+
+
 ### 9. ✅ Upper bound on session duration
 
 Longest scheduled flight in service is roughly 19h (SIN–JFK). Cap sessions at

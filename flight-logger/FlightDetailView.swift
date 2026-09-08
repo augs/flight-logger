@@ -73,6 +73,10 @@ struct FlightDetailView: View {
                 LabeledContent("Largest gap",
                                value: FlightProfileCharts.formatSpan(coverage.largestGap))
                     .foregroundStyle(coverage.largestGap > 600 ? .orange : .primary)
+                if let interval = session.backfillInterval {
+                    LabeledContent("Tag log interval",
+                                   value: FlightProfileCharts.formatSpan(interval))
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

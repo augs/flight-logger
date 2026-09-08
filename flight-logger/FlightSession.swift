@@ -107,6 +107,27 @@ final class FlightSession {
         )
     }
 
+    /// Observed cadence of the tag's onboard log, measured from backfilled
+    /// readings.
+    ///
+    /// The app cannot set this — it is configured in Ruuvi Station — but it
+    /// determines the resolution of everything recovered while the link is
+    /// down, so it is worth surfacing rather than leaving the user to infer it
+    /// from chart spacing. Median rather than mean: a single missing entry
+    /// doubles one gap and would drag an average well off the true interval.
+    var backfillInterval: TimeInterval? {
+        let stamps = sensorReadings
+            .filter { $0.readingSource == .history }
+            .map(\.timestamp)
+            .sorted()
+        guard stamps.count >= 3 else { return nil }
+
+        let gaps = zip(stamps, stamps.dropFirst())
+            .map { $1.timeIntervalSince($0) }
+            .sorted()
+        return gaps[gaps.count / 2]
+    }
+
     /// Range of cabin pressure seen, the most legible one-glance summary of a
     /// flight — it tracks the cabin altitude profile directly.
     var pressureRange: (low: Double, high: Double)? {

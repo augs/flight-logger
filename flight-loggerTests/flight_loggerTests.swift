@@ -408,3 +408,55 @@ struct FlightSessionCoverageTests {
         #expect(legacy.readingSource == .unknown)
     }
 }
+
+// MARK: - Tag log interval
+
+struct BackfillIntervalTests {
+
+    static func session(historyOffsets: [TimeInterval], liveOffsets: [TimeInterval] = []) -> FlightSession {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let session = FlightSession(recordingStartedAt: start)
+        session.sensorReadings =
+            historyOffsets.map {
+                SensorReading(timestamp: start.addingTimeInterval($0),
+                              temperatureCelsius: 22, humidityPercent: 55, pressureHPa: 1000,
+                              source: .history)
+            } +
+            liveOffsets.map {
+                SensorReading(timestamp: start.addingTimeInterval($0),
+                              temperatureCelsius: 22, humidityPercent: 55, pressureHPa: 1000,
+                              source: .heartbeat)
+            }
+        return session
+    }
+
+    @Test func measuresObservedCadence() throws {
+        // Spacing as actually captured from the tag, which alternates 300/301
+        // rather than being exactly periodic — so this asserts a tolerance
+        // rather than a fake exact value.
+        let session = Self.session(historyOffsets: [0, 300, 601, 901, 1202])
+        let interval = try #require(session.backfillInterval)
+        #expect(abs(interval - 300) <= 1)
+    }
+
+    /// A missing log entry doubles one gap; the median must ignore it where a
+    /// mean would be dragged noticeably high.
+    @Test func medianIgnoresAMissingEntry() throws {
+        let session = Self.session(historyOffsets: [0, 300, 600, 1200, 1500, 1800])
+        #expect(try #require(session.backfillInterval) == 300)
+    }
+
+    @Test func ignoresLiveReadings() throws {
+        // 60s live readings interleaved must not pull the measured cadence down.
+        let session = Self.session(
+            historyOffsets: [0, 300, 600, 900],
+            liveOffsets: [10, 70, 130, 190, 250]
+        )
+        #expect(try #require(session.backfillInterval) == 300)
+    }
+
+    @Test func needsEnoughSamplesToBeMeaningful() {
+        #expect(Self.session(historyOffsets: [0, 300]).backfillInterval == nil)
+        #expect(Self.session(historyOffsets: []).backfillInterval == nil)
+    }
+}

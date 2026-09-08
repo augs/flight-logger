@@ -37,6 +37,12 @@ final class AirlineAPIService {
     private var pollingTask: Task<Void, Never>?
     private var detectedConfig: AirlineConfig?
     private var hasPopulatedMetadata = false
+
+    /// Consecutive polls reporting on-ground. Reset by any airborne reading.
+    private var consecutiveOnGround = 0
+    /// Polls the indicator must hold before a session is ended. At the 30s poll
+    /// interval this is ~90 seconds.
+    private static let onGroundConfirmations = 3
     private var flightSession: FlightSession?
     private var modelContext: ModelContext?
 
@@ -59,6 +65,7 @@ final class AirlineAPIService {
     func startPolling(flightSession: FlightSession, modelContext: ModelContext) {
         stopPolling()
         hasPopulatedMetadata = false
+        consecutiveOnGround = 0
         self.flightSession = flightSession
         self.modelContext = modelContext
         status = .detecting
@@ -218,10 +225,26 @@ final class AirlineAPIService {
                 hasPopulatedMetadata = true
             }
 
-            // Check on-ground indicator for auto-stop
-            if let onGround = resolveBool(json: json, path: fields.onGround), onGround {
-                flightSession.recordingEndedAt = Date()
-                stopPolling()
+            // Auto-stop on the on-ground indicator, but only after it holds.
+            //
+            // A single true reading is not enough: the flag is also true during
+            // taxi and pushback, and a transient one mid-flight would end a
+            // recording that cannot be resumed. Requiring consecutive polls
+            // costs ~90s of extra tail data and removes that whole class of
+            // false positive.
+            if let onGround = resolveBool(json: json, path: fields.onGround) {
+                if onGround {
+                    consecutiveOnGround += 1
+                    if consecutiveOnGround >= Self.onGroundConfirmations {
+                        logger.info("On-ground confirmed \(self.consecutiveOnGround)x — ending session")
+                        flightSession.recordingEndedAt = Date()
+                        stopPolling()
+                    } else {
+                        logger.info("On-ground reported (\(self.consecutiveOnGround)/\(Self.onGroundConfirmations)) — waiting for confirmation")
+                    }
+                } else {
+                    consecutiveOnGround = 0
+                }
             }
 
             // Kept separate from the network catch below so a persistence

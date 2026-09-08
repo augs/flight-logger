@@ -47,6 +47,15 @@ final class DataCollectionManager {
     /// while costing a connection and a scanning pause each time.
     private static let historySyncInterval: TimeInterval = 15 * 60
 
+    /// End a session that has received nothing from any source for this long.
+    ///
+    /// Manual sessions have no `onGround` indicator, so without this the only
+    /// backstop is the 21h cap — a session the user forgot to stop would run
+    /// most of a day. Two hours is deliberately generous: ending a recording
+    /// early is worse than running long, since it cannot be resumed, and a
+    /// tag out of range plus no airline API is a plausible mid-flight state.
+    private static let inactivityTimeout: TimeInterval = 2 * 60 * 60
+
     /// Hard ceiling on session length. The longest scheduled flight in service
     /// is roughly 19h (SIN–JFK), so this leaves ~2h of headroom. Without it a
     /// session that never sees an `onGround` indicator — every manual session —
@@ -230,13 +239,34 @@ final class DataCollectionManager {
         }
     }
 
-    /// End a session that has outrun the maximum plausible flight length.
+    /// End a session that has outrun the maximum plausible flight length, or
+    /// that has gone completely silent.
     private func enforceSessionLimit(_ session: FlightSession) {
-        let elapsed = Date().timeIntervalSince(session.recordingStartedAt)
-        guard elapsed > Self.maxSessionDuration else { return }
+        let now = Date()
 
-        logger.warning("Session exceeded \(Int(Self.maxSessionDuration / 3600))h — auto-ending")
+        if now.timeIntervalSince(session.recordingStartedAt) > Self.maxSessionDuration {
+            logger.warning("Session exceeded \(Int(Self.maxSessionDuration / 3600))h — auto-ending")
+            endSession(session, reason: "exceeded maximum duration")
+            return
+        }
+
+        // Silence means nothing from *either* source. A dropped tag alone is
+        // not enough — the airline API may still be recording a real flight,
+        // and vice versa.
+        let lastData = [bleScanner.lastReading, apiService.lastPollTime]
+            .compactMap { $0 }
+            .max() ?? session.recordingStartedAt
+
+        if now.timeIntervalSince(lastData) > Self.inactivityTimeout {
+            logger.warning("No data from any source for \(Int(Self.inactivityTimeout / 3600))h — auto-ending")
+            endSession(session, reason: "no data received")
+        }
+    }
+
+    private func endSession(_ session: FlightSession, reason: String) {
+        logger.info("Auto-ending session: \(reason, privacy: .public)")
         session.recordingEndedAt = Date()
+        try? modelContext?.save()
         stopSession()
     }
 

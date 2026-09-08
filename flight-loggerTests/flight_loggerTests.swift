@@ -496,3 +496,38 @@ struct DeviceReadingTests {
         #expect((good.gpsVerticalAccuracy ?? .infinity) < 50)
     }
 }
+
+// MARK: - CoreLocation invalid-value handling
+
+/// CoreLocation reports "no value" as a negative number rather than nil.
+/// Measured on 2026-09-08, speed was invalid in 35/35 samples over a
+/// 37-minute journey, so this is the common case rather than an edge one.
+struct LocationSentinelTests {
+
+    /// Mirrors the normalisation in DataCollectionManager.recordDeviceReading.
+    static func normalise(speed: Double?, altitude: Double?, verticalAccuracy: Double?)
+        -> (speed: Double?, altitude: Double?, accuracy: Double?) {
+        let s = speed.flatMap { $0 >= 0 ? $0 : nil }
+        let a = (verticalAccuracy ?? -1) > 0 ? altitude : nil
+        return (s, a, verticalAccuracy.flatMap { $0 > 0 ? $0 : nil })
+    }
+
+    @Test func invalidSpeedBecomesNilNotMinusOne() {
+        #expect(Self.normalise(speed: -1, altitude: nil, verticalAccuracy: nil).speed == nil)
+        // Zero is a real measurement — stationary — and must survive.
+        #expect(Self.normalise(speed: 0, altitude: nil, verticalAccuracy: 10).speed == 0)
+        #expect(Self.normalise(speed: 61.5, altitude: nil, verticalAccuracy: 10).speed == 61.5)
+    }
+
+    @Test func altitudeIsDroppedWhenItsAccuracyIsInvalid() {
+        // A negative vertical accuracy means the altitude is meaningless, even
+        // though the altitude field still carries a plausible-looking number.
+        let bad = Self.normalise(speed: nil, altitude: 23.2, verticalAccuracy: -1)
+        #expect(bad.altitude == nil)
+        #expect(bad.accuracy == nil)
+
+        let good = Self.normalise(speed: nil, altitude: 10_600, verticalAccuracy: 8)
+        #expect(good.altitude == 10_600)
+        #expect(good.accuracy == 8)
+    }
+}

@@ -409,9 +409,27 @@ pressure altitude, GNSS altitude and the airline's number are three different
 quantities and the disagreement is the interesting part.
 
 Poor fixes are filtered from the chart (accuracy must be positive and under
-50 m) but still stored, so a bad fix stays distinguishable from no fix. Cabin
-GNSS is unreliable and plotting a 200 m-accuracy sample beside the airline
-figure would invent a disagreement that isn't real.
+50 m) but still stored, so a bad fix stays distinguishable from no fix.
+
+**Measured on device 2026-09-08 — GPS is far weaker than expected:**
+
+- **Speed was invalid in 35/35 samples** across a 37-minute moving journey.
+  `CLLocation.speed` needs a GNSS-quality fix, and the keep-alive deliberately
+  runs at `kCLLocationAccuracyThreeKilometers`, where coarse cell/WiFi fixes
+  carry no Doppler speed at all.
+- Altitude did vary but poorly: −9 m to 23 m with 13–40 m vertical accuracy,
+  visibly lagging the barometer's far cleaner profile over the same minutes.
+
+CoreLocation signals "no value" as a negative number, so invalid speed and
+altitude are now normalised to nil at capture rather than storing a literal
+−1 that would be charted as a real measurement.
+
+**Decision: do not raise location accuracy to fix this.** The same run measured
+100% → 95% battery in 37 minutes (~8%/hour), so power is the binding constraint,
+and higher accuracy is exactly what costs it. The barometer already covers
+vertical profile better, and ground speed comes from the airline API when
+present. GPS speed on a no-API flight is a real gap, but not one worth paying
+for at that rate. See #26.
 
 ### 24. Motion / turbulence — requires opt-in
 
@@ -487,6 +505,29 @@ state now live in one place and apply to every panel.
 
 Also added touch-to-scrub with a shared rule and per-panel value readout, and
 fixed a degenerate domain (a session with one reading rendered an empty panel).
+
+### 26. Decide what to do about battery cost
+
+First real measurement, 2026-09-08: **100% → 95% over 37 minutes** with the tag
+link held, location keep-alive running and the barometer active — roughly
+8%/hour. Extrapolated over a 10-hour flight that is most of a battery.
+
+Caveats before treating that as the number: the run started from full (where
+the first few percent drop fastest), the phone was on a train with the cellular
+radio hunting, and it was in use. Treat it as an upper bound.
+
+Worth investigating, cheapest first:
+
+- The location keep-alive is the likely dominant cost and cannot simply be
+  removed — it is what keeps the process alive. But `pausesLocationUpdates`
+  and the distance filter could be revisited.
+- The held BLE link costs something; a duty cycle would trade resolution for
+  power.
+- Measure with a session that starts near 50% and sits idle, to separate the
+  app's draw from the train's.
+
+Relevant to #23: raising location accuracy to recover GPS speed would push this
+number the wrong way.
 
 ### 13. Log export for Grafana
 

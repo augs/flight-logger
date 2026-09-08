@@ -253,12 +253,25 @@ final class DataCollectionManager {
     private func recordDeviceReading(session: FlightSession, context: ModelContext) {
         let fix = locationKeepAlive.lastLocation
 
+        // CoreLocation signals "no value" with a negative number, not nil.
+        // Storing -1 would put a literal -1 m/s on a chart, so invalid readings
+        // are normalised to nil here rather than at every read site.
+        //
+        // Measured 2026-09-08: speed was invalid in 35/35 samples across a
+        // 37-minute train journey. That is a consequence of the keep-alive
+        // running at kCLLocationAccuracyThreeKilometers — coarse cell/WiFi
+        // fixes carry no Doppler speed. Raising accuracy would fix it and cost
+        // battery, which the same run showed is already the binding constraint.
+        let speed = (fix?.speed).flatMap { $0 >= 0 ? $0 : nil }
+        let verticalAccuracy = fix?.verticalAccuracy
+        let altitude = (verticalAccuracy ?? -1) > 0 ? fix?.altitude : nil
+
         let reading = DeviceReading(
             pressureHPa: barometer.pressureHPa,
             relativeAltitudeMeters: barometer.relativeAltitudeMeters,
-            gpsAltitudeMeters: fix?.altitude,
-            gpsVerticalAccuracy: fix?.verticalAccuracy,
-            gpsSpeedMPS: fix?.speed,
+            gpsAltitudeMeters: altitude,
+            gpsVerticalAccuracy: verticalAccuracy.flatMap { $0 > 0 ? $0 : nil },
+            gpsSpeedMPS: speed,
             session: session
         )
         // Don't store rows that carry nothing; an empty row is indistinguishable

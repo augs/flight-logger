@@ -164,11 +164,13 @@ struct CoverageSummary: View {
 
     private func icon(for coverage: FlightSession.Coverage) -> String {
         if coverage.largestGap > 600 { return "chart.line.downtrend.xyaxis" }
+        if coverage.provenanceUnknown { return "questionmark.circle" }
         return coverage.liveFraction > 0.5 ? "waveform.path.ecg" : "clock.arrow.circlepath"
     }
 
     private func tint(for coverage: FlightSession.Coverage) -> Color {
         if coverage.largestGap > 600 { return .orange }
+        if coverage.provenanceUnknown { return .secondary }
         return coverage.liveFraction > 0.5 ? .green : .secondary
     }
 }

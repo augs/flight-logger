@@ -63,8 +63,13 @@ struct FlightDetailView: View {
             let coverage = session.coverage
             LabeledContent("Sensor readings", value: "\(coverage.readings)")
             if coverage.readings > 0 {
-                LabeledContent(ReadingSource.heartbeat.label.replacingOccurrences(of: " (linked)", with: ""),
-                               value: "\(coverage.highResolution) live · \(coverage.backfilled) backfilled")
+                if coverage.provenanceUnknown {
+                    LabeledContent("Source", value: "Recorded before provenance tracking")
+                        .foregroundStyle(.secondary)
+                } else {
+                    LabeledContent("Source",
+                                   value: "\(coverage.highResolution) live · \(coverage.backfilled) backfilled")
+                }
                 LabeledContent("Largest gap",
                                value: FlightProfileCharts.formatSpan(coverage.largestGap))
                     .foregroundStyle(coverage.largestGap > 600 ? .orange : .primary)

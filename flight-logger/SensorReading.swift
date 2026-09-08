@@ -30,8 +30,12 @@ enum ReadingSource: String, CaseIterable {
         }
     }
 
-    /// Backfilled data is coarse; live data is not. Used to describe coverage.
-    var isHighResolution: Bool { self != .history }
+    /// Backfilled data is coarse; live data is not.
+    ///
+    /// `.unknown` is deliberately neither. Rows written before provenance
+    /// existed genuinely cannot be classified, and counting them as live would
+    /// make every historical session overstate its coverage.
+    var isHighResolution: Bool { self == .heartbeat || self == .advertisement }
 }
 
 @Model

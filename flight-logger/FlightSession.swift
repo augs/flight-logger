@@ -65,18 +65,24 @@ final class FlightSession {
         let readings: Int
         let highResolution: Int
         let backfilled: Int
+        /// Rows predating provenance tracking — classifiable as neither.
+        let unclassified: Int
         /// Longest interval between consecutive readings.
         let largestGap: TimeInterval
         /// Fraction of the session covered at better than the tag's log cadence.
         let liveFraction: Double
 
         var isEmpty: Bool { readings == 0 }
+        /// True when provenance is mostly unknown, so a live/backfilled split
+        /// would be misleading rather than informative.
+        var provenanceUnknown: Bool { unclassified > readings / 2 }
     }
 
     var coverage: Coverage {
         let sorted = sensorReadings.sorted { $0.timestamp < $1.timestamp }
         guard !sorted.isEmpty else {
-            return Coverage(readings: 0, highResolution: 0, backfilled: 0, largestGap: 0, liveFraction: 0)
+            return Coverage(readings: 0, highResolution: 0, backfilled: 0,
+                            unclassified: 0, largestGap: 0, liveFraction: 0)
         }
 
         var largestGap: TimeInterval = 0
@@ -85,12 +91,19 @@ final class FlightSession {
         }
 
         let high = sorted.filter { $0.readingSource.isHighResolution }.count
+        let backfilled = sorted.filter { $0.readingSource == .history }.count
+        let unclassified = sorted.count - high - backfilled
+
+        // Fraction is over classified rows only; including unknowns in the
+        // denominator would understate sessions we simply can't judge.
+        let classified = high + backfilled
         return Coverage(
             readings: sorted.count,
             highResolution: high,
-            backfilled: sorted.count - high,
+            backfilled: backfilled,
+            unclassified: unclassified,
             largestGap: largestGap,
-            liveFraction: Double(high) / Double(sorted.count)
+            liveFraction: classified > 0 ? Double(high) / Double(classified) : 0
         )
     }
 
@@ -104,7 +117,7 @@ final class FlightSession {
 
     var hasFlightData: Bool { !flightDataPoints.isEmpty }
 
-        var displayTitle: String {
+    var displayTitle: String {
         if flightNumber.isEmpty {
             return "Flight on \(recordingStartedAt.formatted(date: .abbreviated, time: .shortened))"
         }

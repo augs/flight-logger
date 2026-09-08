@@ -360,7 +360,26 @@ struct FlightSessionCoverageTests {
         #expect(coverage.readings == 4)
         #expect(coverage.highResolution == 3)
         #expect(coverage.backfilled == 1)
+        #expect(coverage.unclassified == 0)
         #expect(abs(coverage.liveFraction - 0.75) < 0.001)
+        #expect(!coverage.provenanceUnknown)
+    }
+
+    /// Rows written before provenance tracking must not be counted as live —
+    /// doing so made every pre-existing session overstate its coverage.
+    @Test func unknownProvenanceIsNeitherLiveNorBackfilled() {
+        let coverage = Self.session(with: [
+            (0, .unknown), (60, .unknown), (120, .unknown), (180, .heartbeat),
+        ]).coverage
+
+        #expect(coverage.readings == 4)
+        #expect(coverage.highResolution == 1)
+        #expect(coverage.backfilled == 0)
+        #expect(coverage.unclassified == 3)
+        #expect(coverage.provenanceUnknown)
+        // Fraction is over classified rows only, so the one known row reads as
+        // fully live rather than being diluted by rows we cannot judge.
+        #expect(coverage.liveFraction == 1.0)
     }
 
     /// The largest gap must be the worst hole, not an average — a single long

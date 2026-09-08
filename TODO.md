@@ -536,6 +536,30 @@ Worth investigating, cheapest first:
 Relevant to #23: raising location accuracy to recover GPS speed would push this
 number the wrong way.
 
+### 27. Collect real airline API responses
+
+The parser and mock server are in place; what is missing is *data*. Only United
+has a real config, and its response shape is known from a single documented
+example rather than a capture.
+
+The only way to get these is in the air, so the practical approach is to
+capture opportunistically and build coverage over time:
+
+- On any flight with WiFi, open the portal in the phone's browser and save the
+  JSON response before starting a session.
+- Save it under `flight-loggerTests/Fixtures/<airline>.json`, add the field
+  mappings as a config, and add a parser test asserting both the values and
+  that landing is detectable.
+
+Deliberately **not** doing: guessing endpoints or schemas for airlines we have
+not observed. A config that looks plausible and is wrong is worse than a
+missing one — it would probe a URL that never answers, or worse, half-match and
+record nonsense. Every config in the repo should trace to a captured response.
+
+Known to exist but unverified: Panasonic Avionics and Gogo power many carriers'
+portals, so a single correct config may cover several airlines. Worth checking
+once a second real capture is available.
+
 ### 13. Log export for Grafana
 
 Needs design first. Likely CSV or line-protocol export per session, shared via

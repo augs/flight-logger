@@ -10,6 +10,7 @@ import SwiftUI
 struct SettingsView: View {
     @AppStorage("recordingStartMode") private var startMode: RecordingStartMode = .autoWithFallback
     @AppStorage("unitPreference") private var unitPreference: UnitPreference = .system
+    @AppStorage(AirlineConfigLoader.testURLKey) private var testAPIURL: String = ""
 
     var body: some View {
         NavigationStack {
@@ -50,6 +51,21 @@ struct SettingsView: View {
                     Text("Units")
                 } footer: {
                     Text("Choose how altitude, speed, and temperature are displayed. System Default uses your device's region settings.")
+                }
+
+                Section {
+                    TextField("http://192.168.1.10:8080/…", text: $testAPIURL)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption.monospaced())
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                        #endif
+                } header: {
+                    Text("Test API URL")
+                } footer: {
+                    Text("Probed before the bundled airline configs. Point this at Tools-MockAirlineAPI.py on your network to exercise the polling path without flying. Leave empty in normal use.")
                 }
 
                 Section {

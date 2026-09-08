@@ -197,13 +197,14 @@ final class AirlineAPIService {
             let (data, _) = try await session.data(from: url)
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
 
-            let fields = config.fields
+            // Parsing lives in AirlineResponseParser so it can be tested
+            // against recorded responses without a network or a flight.
+            let reading = AirlineResponseParser.parse(json: json, fields: config.fields)
 
-            // Extract numeric values for the data point
-            let altitude = resolveDouble(json: json, path: fields.altitudeFt) ?? 0
-            let speed = resolveDouble(json: json, path: fields.groundSpeedMPH) ?? 0
-            let airTemp = resolveDouble(json: json, path: fields.airTempF) ?? 0
-            let flightStatus = resolveString(json: json, path: fields.flightStatus) ?? ""
+            let altitude = reading.altitudeFt ?? 0
+            let speed = reading.groundSpeedMPH ?? 0
+            let airTemp = reading.airTempF ?? 0
+            let flightStatus = reading.flightStatus ?? ""
 
             let dataPoint = FlightDataPoint(
                 altitudeFt: altitude,
@@ -216,12 +217,11 @@ final class AirlineAPIService {
 
             lastPollTime = Date()
 
-            // Update time remaining from API
-            timeRemainingMinutes = resolveDouble(json: json, path: fields.timeRemainingMinutes)
+            timeRemainingMinutes = reading.timeRemainingMinutes
 
             // Auto-populate session metadata on first successful poll
             if !hasPopulatedMetadata {
-                populateMetadata(json: json, fields: fields, session: flightSession)
+                populateMetadata(reading, session: flightSession)
                 hasPopulatedMetadata = true
             }
 
@@ -232,7 +232,7 @@ final class AirlineAPIService {
             // recording that cannot be resumed. Requiring consecutive polls
             // costs ~90s of extra tail data and removes that whole class of
             // false positive.
-            if let onGround = resolveBool(json: json, path: fields.onGround) {
+            if let onGround = reading.onGround {
                 if onGround {
                     consecutiveOnGround += 1
                     if consecutiveOnGround >= Self.onGroundConfirmations {
@@ -266,62 +266,20 @@ final class AirlineAPIService {
 
     // MARK: - Metadata population
 
-    private func populateMetadata(json: [String: Any], fields: AirlineConfig.FieldMappings, session: FlightSession) {
-        if let num = resolveString(json: json, path: fields.flightNumber), session.flightNumber.isEmpty {
-            session.flightNumber = num
+    private func populateMetadata(_ reading: AirlineResponseParser.Reading, session: FlightSession) {
+        // Only fill blanks: a value the user typed, or an earlier poll
+        // established, should not be overwritten by a later one.
+        if let number = reading.flightNumber, session.flightNumber.isEmpty {
+            session.flightNumber = number
         }
-        if let origin = resolveString(json: json, path: fields.origin), session.origin.isEmpty {
+        if let origin = reading.origin, session.origin.isEmpty {
             session.origin = origin
         }
-        if let dest = resolveString(json: json, path: fields.destination), session.destination.isEmpty {
-            session.destination = dest
+        if let destination = reading.destination, session.destination.isEmpty {
+            session.destination = destination
         }
-        if let path = fields.aircraftModel, let model = resolveString(json: json, path: path), session.aircraftModel.isEmpty {
+        if let model = reading.aircraftModel, session.aircraftModel.isEmpty {
             session.aircraftModel = model
         }
-    }
-
-    // MARK: - JSON path resolution
-
-    /// Resolves a dot-separated key path (e.g. "flifo.altitudeFt") in a nested dictionary.
-    private func resolve(json: [String: Any], path: String?) -> Any? {
-        guard let path else { return nil }
-        let components = path.split(separator: ".").map(String.init)
-        var current: Any = json
-        for key in components {
-            guard let dict = current as? [String: Any], let next = dict[key] else {
-                return nil
-            }
-            current = next
-        }
-        return current
-    }
-
-    private func resolveString(json: [String: Any], path: String?) -> String? {
-        guard let value = resolve(json: json, path: path) else { return nil }
-        if let s = value as? String { return s }
-        return "\(value)"
-    }
-
-    private func resolveDouble(json: [String: Any], path: String?) -> Double? {
-        guard let value = resolve(json: json, path: path) else { return nil }
-        if let d = value as? Double { return d }
-        if let i = value as? Int { return Double(i) }
-        if let s = value as? String { return Double(s) }
-        return nil
-    }
-
-    private func resolveBool(json: [String: Any], path: String?) -> Bool? {
-        guard let value = resolve(json: json, path: path) else { return nil }
-        if let b = value as? Bool { return b }
-        if let s = value as? String {
-            switch s.lowercased() {
-            case "true", "1", "yes": return true
-            case "false", "0", "no": return false
-            default: return nil
-            }
-        }
-        if let i = value as? Int { return i != 0 }
-        return nil
     }
 }

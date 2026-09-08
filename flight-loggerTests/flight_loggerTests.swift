@@ -531,3 +531,175 @@ struct LocationSentinelTests {
         #expect(good.accuracy == 8)
     }
 }
+
+// MARK: - Airline API response parsing
+
+/// The parser is the part most likely to be wrong for any given airline.
+/// Portals disagree about whether numbers arrive as JSON numbers or strings and
+/// about how they spell booleans, and a silent coercion failure means a field
+/// is missing from a recording that cannot be taken again.
+struct AirlineResponseParserTests {
+
+    static let unitedFields = AirlineConfig.FieldMappings(
+        flightNumber: "flifo.flightNumber",
+        origin: "flifo.originAirportCode",
+        destination: "flifo.destinationAirportCode",
+        altitudeFt: "flifo.altitudeFt",
+        groundSpeedMPH: "flifo.groundSpeedMPH",
+        airTempF: "flifo.airTemperatureF",
+        onGround: "flifo.onGround",
+        aircraftModel: "flifo.aircraftModel",
+        flightStatus: "flifo.flightStatus",
+        scheduledDepartureTimeLocal: "flifo.scheduledDepartureTimeLocal",
+        scheduledArrivalTimeLocal: "flifo.scheduledArrivalTimeLocal",
+        timeRemainingMinutes: "flifo.timeRemainingToDestination"
+    )
+
+    static func json(_ raw: String) throws -> [String: Any] {
+        try #require(
+            JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any]
+        )
+    }
+
+    /// United sends every numeric field as a *string*. If the coercion broke,
+    /// altitude and speed would silently record as zero for a whole flight.
+    @Test func parsesUnitedResponseWithStringNumerics() throws {
+        let body = """
+        {"flifo":{"originAirportCode":"EWR","destinationAirportCode":"SFO",
+        "flightNumber":"1885","flightStatus":"In Flight","groundSpeedMPH":"433",
+        "airTemperatureF":"-2","altitudeFt":"21404","aircraftModel":"Boeing 777-200",
+        "timeRemainingToDestination":319}}
+        """
+        let reading = AirlineResponseParser.parse(json: try Self.json(body), fields: Self.unitedFields)
+
+        #expect(reading.flightNumber == "1885")
+        #expect(reading.origin == "EWR")
+        #expect(reading.destination == "SFO")
+        #expect(reading.aircraftModel == "Boeing 777-200")
+        #expect(reading.altitudeFt == 21404)
+        #expect(reading.groundSpeedMPH == 433)
+        #expect(reading.airTempF == -2)          // negative, as a string
+        #expect(reading.timeRemainingMinutes == 319)  // this one is a real number
+        #expect(reading.onGround == nil)         // absent in flight
+    }
+
+    @Test func detectsOnGroundAcrossSpellings() throws {
+        let fields = Self.unitedFields
+        for (raw, expected) in [("true", true), ("\"true\"", true), ("\"YES\"", true),
+                                ("1", true), ("\"1\"", true),
+                                ("false", false), ("\"no\"", false), ("0", false)] {
+            let body = "{\"flifo\":{\"onGround\":\(raw)}}"
+            let reading = AirlineResponseParser.parse(json: try Self.json(body), fields: fields)
+            #expect(reading.onGround == expected, "onGround from \(raw)")
+        }
+
+        // Unrecognised text must be nil, not a guess — an accidental `true`
+        // here would end a recording mid-flight.
+        let odd = try Self.json("{\"flifo\":{\"onGround\":\"maybe\"}}")
+        #expect(AirlineResponseParser.parse(json: odd, fields: fields).onGround == nil)
+    }
+
+    @Test func missingAndNullFieldsAreAbsentNotZero() throws {
+        let body = """
+        {"flifo":{"flightNumber":"1885","altitudeFt":null,"aircraftModel":"  "}}
+        """
+        let reading = AirlineResponseParser.parse(json: try Self.json(body), fields: Self.unitedFields)
+
+        #expect(reading.flightNumber == "1885")
+        #expect(reading.altitudeFt == nil)       // JSON null, not 0
+        #expect(reading.aircraftModel == nil)    // blank string, not "  "
+        #expect(reading.groundSpeedMPH == nil)   // key absent entirely
+    }
+
+    @Test func wrongPathsYieldAnEmptyReading() throws {
+        // A config whose paths don't match this portal should produce nothing
+        // rather than partial nonsense — that is the signal the config is wrong.
+        let body = "{\"data\":{\"alt\":30000}}"
+        let reading = AirlineResponseParser.parse(json: try Self.json(body), fields: Self.unitedFields)
+        #expect(reading.isEmpty)
+    }
+
+    /// Some portals wrap the active leg in an array.
+    @Test func resolvesThroughArrayIndices() throws {
+        let body = "{\"legs\":[{\"alt\":31000},{\"alt\":0}]}"
+        let json = try Self.json(body)
+        #expect(AirlineResponseParser.double(json, "legs.0.alt") == 31000)
+        #expect(AirlineResponseParser.double(json, "legs.1.alt") == 0)
+        #expect(AirlineResponseParser.double(json, "legs.9.alt") == nil)
+    }
+
+    /// Seen in the wild: thousands separators and padding around numbers.
+    @Test func toleratesFormattedNumbers() throws {
+        let json = try Self.json("{\"a\":\"21,404\",\"b\":\" 433 \",\"c\":\"+62\",\"d\":\"n/a\"}")
+        #expect(AirlineResponseParser.double(json, "a") == 21404)
+        #expect(AirlineResponseParser.double(json, "b") == 433)
+        #expect(AirlineResponseParser.double(json, "c") == 62)
+        #expect(AirlineResponseParser.double(json, "d") == nil)
+    }
+
+    @Test func numbersRequestedAsStringsAreStringified() throws {
+        // flightNumber is mapped as a string but often arrives as a number.
+        let json = try Self.json("{\"flifo\":{\"flightNumber\":1885}}")
+        let reading = AirlineResponseParser.parse(json: json, fields: Self.unitedFields)
+        #expect(reading.flightNumber == "1885")
+    }
+}
+
+// MARK: - A second airline shape, via config only
+
+/// The plugin system's whole premise is that a new airline needs a JSON config
+/// and no code. This exercises a deliberately different shape — real numbers
+/// instead of strings, an array-wrapped leg, a differently spelled boolean —
+/// against the same parser. If this needs a code change, the premise is false.
+struct SecondAirlineShapeTests {
+
+    static let fields = AirlineConfig.FieldMappings(
+        flightNumber: "flightInfo.legs.0.flight.number",
+        origin: "flightInfo.legs.0.departure.code",
+        destination: "flightInfo.legs.0.arrival.code",
+        altitudeFt: "flightInfo.legs.0.telemetry.altitude",
+        groundSpeedMPH: "flightInfo.legs.0.telemetry.groundSpeed",
+        airTempF: "flightInfo.legs.0.telemetry.outsideAirTempC",
+        onGround: "flightInfo.legs.0.telemetry.weightOnWheels",
+        aircraftModel: "flightInfo.legs.0.flight.equipment",
+        flightStatus: "flightInfo.legs.0.status",
+        scheduledDepartureTimeLocal: nil,
+        scheduledArrivalTimeLocal: nil,
+        timeRemainingMinutes: "flightInfo.legs.0.telemetry.minutesRemaining"
+    )
+
+    static let body = """
+    {"flightInfo":{"legs":[{"departure":{"code":"ATL"},"arrival":{"code":"LAX"},
+    "flight":{"number":1234,"equipment":"Airbus A321"},
+    "telemetry":{"altitude":34000,"groundSpeed":512,"outsideAirTempC":-51,
+    "weightOnWheels":"false","minutesRemaining":88},"status":"ENROUTE"}]}}
+    """
+
+    @Test func parsesArrayNestedShapeWithNoCodeChange() throws {
+        let json = try #require(
+            JSONSerialization.jsonObject(with: Data(Self.body.utf8)) as? [String: Any]
+        )
+        let reading = AirlineResponseParser.parse(json: json, fields: Self.fields)
+
+        #expect(reading.origin == "ATL")
+        #expect(reading.destination == "LAX")
+        #expect(reading.flightNumber == "1234")        // number -> string
+        #expect(reading.aircraftModel == "Airbus A321")
+        #expect(reading.altitudeFt == 34000)           // real JSON number
+        #expect(reading.groundSpeedMPH == 512)
+        #expect(reading.timeRemainingMinutes == 88)
+        #expect(reading.onGround == false)             // "false" as a string
+        #expect(reading.flightStatus == "ENROUTE")
+    }
+
+    /// Landing must be detectable in this shape too, or auto-stop silently
+    /// never fires for that airline.
+    @Test func detectsLandingInThisShape() throws {
+        let landed = Self.body
+            .replacingOccurrences(of: "\"weightOnWheels\":\"false\"", with: "\"weightOnWheels\":\"true\"")
+        let json = try #require(
+            JSONSerialization.jsonObject(with: Data(landed.utf8)) as? [String: Any]
+        )
+        #expect(AirlineResponseParser.parse(json: json, fields: Self.fields).onGround == true)
+    }
+}

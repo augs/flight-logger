@@ -1,0 +1,18 @@
+{
+  "flifo": {
+    "originAirportCode": "EWR",
+    "destinationAirportCode": "SFO",
+    "flightNumber": "1885",
+    "flightStatus": "In Flight - Estimated to Arrive 4 Minutes Early",
+    "airSpeedMPH": "62",
+    "groundSpeedMPH": "433",
+    "airTemperatureF": "-2",
+    "altitudeFt": "21404",
+    "altitudeMeters": "6523",
+    "aircraftModel": "Boeing 777-200",
+    "scheduledDepartureTimeLocal": "04 May 2019 4:00 PM",
+    "scheduledArrivalTimeLocal": "04 May 2019 7:04 PM",
+    "timeRemainingToDestination": 319,
+    "flightDurationMinutes": 364
+  }
+}

@@ -37,14 +37,53 @@ struct AirlineConfig: Codable, Identifiable {
 
 /// Loads all bundled airline configs from the app bundle.
 enum AirlineConfigLoader {
+
+    /// User-set URL of a mock or captured API, probed ahead of the bundled
+    /// configs. Without this the only way to exercise the polling path is to
+    /// board an aircraft, which makes every change to it untestable.
+    static let testURLKey = "testAPIBaseURL"
+
+    /// A config pointing at whatever the user put in Settings.
+    ///
+    /// Uses United's field mappings because `Tools-MockAirlineAPI.py` serves
+    /// that shape by default — including its habit of sending every number as
+    /// a string, which is the case most likely to break parsing.
+    static func testConfig() -> AirlineConfig? {
+        let raw = UserDefaults.standard.string(forKey: testURLKey) ?? ""
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, URL(string: trimmed) != nil else { return nil }
+
+        return AirlineConfig(
+            airline: "Test API",
+            url: trimmed,
+            fields: .init(
+                flightNumber: "flifo.flightNumber",
+                origin: "flifo.originAirportCode",
+                destination: "flifo.destinationAirportCode",
+                altitudeFt: "flifo.altitudeFt",
+                groundSpeedMPH: "flifo.groundSpeedMPH",
+                airTempF: "flifo.airTemperatureF",
+                onGround: "flifo.onGround",
+                aircraftModel: "flifo.aircraftModel",
+                flightStatus: "flifo.flightStatus",
+                scheduledDepartureTimeLocal: nil,
+                scheduledArrivalTimeLocal: nil,
+                timeRemainingMinutes: "flifo.timeRemainingToDestination"
+            )
+        )
+    }
+
     static func loadAll() -> [AirlineConfig] {
         guard let urls = Bundle.main.urls(forResourcesWithExtension: "json", subdirectory: "AirlineConfigs") else {
             return []
         }
-        return urls.compactMap { url in
+        let bundled = urls.compactMap { url -> AirlineConfig? in
             guard let data = try? Data(contentsOf: url) else { return nil }
             return try? JSONDecoder().decode(AirlineConfig.self, from: data)
         }
+        // Test config first: when set, it is deliberately what you want probed,
+        // and probing a real airline URL from the ground just wastes a timeout.
+        return [testConfig()].compactMap { $0 } + bundled
     }
 
     static func loadConfig(named airline: String) -> AirlineConfig? {

@@ -1,0 +1,14 @@
+{
+  "flifo": {
+    "originAirportCode": "EWR",
+    "destinationAirportCode": "SFO",
+    "flightNumber": "1885",
+    "flightStatus": "Arrived",
+    "groundSpeedMPH": "0",
+    "airTemperatureF": "71",
+    "altitudeFt": "13",
+    "aircraftModel": "Boeing 777-200",
+    "onGround": true,
+    "timeRemainingToDestination": 0
+  }
+}

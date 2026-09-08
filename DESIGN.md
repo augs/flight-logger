@@ -405,3 +405,57 @@ API, and the Series 8+ wrist temperature sensor produces only overnight
 sleeping-temperature deviation. The RuuviTag is the sole source for those two
 measurements, which is why the tag remains central to the design rather than a
 convenience.
+
+---
+
+## What the barometer does and does not measure
+
+The phone's barometer measures **cabin** pressure, not altitude. In a
+pressurised aircraft the cabin is held near a 6,000–8,000 ft equivalent
+regardless of what the aircraft is doing, so the barometer traces the
+*pressurisation schedule* — which is precisely what this app exists to record —
+and says nothing directly about how high the aircraft is.
+
+Aircraft altitude therefore comes only from the airline API. GPS is not a
+substitute: verified 2026-09-08, a subway journey produced invalid speed in
+35/35 samples and coarse cell-derived altitude, because there was no satellite
+signal. An aircraft cabin is closer to that case than to open sky.
+
+Consequences worth keeping straight:
+
+- Cabin pressure (tag, phone barometer) — always available, the core record.
+- Aircraft altitude (airline API) — available only on flights with a reachable
+  portal, which is a minority.
+- GPS altitude and speed — opportunistic extras, frequently absent.
+
+## Testing the airline API without flying
+
+Airline portals are only reachable in the air, which made the polling path
+effectively untestable and left it with no coverage at all. Two pieces address
+that.
+
+`AirlineResponseParser` holds the JSON-to-values logic, separated from
+networking and persistence so it can be run against recorded responses. This is
+where airline differences actually bite: United sends every numeric as a
+*string*, others send real numbers, and booleans appear as `true`, `"true"`,
+`"YES"` and `1`. A silent coercion failure means a field is missing from a
+recording that cannot be retaken.
+
+`Tools-MockAirlineAPI.py` serves a simulated flight — climb, cruise, descent,
+then the on-ground flag — over a configurable duration, so the temporal
+behaviour can be exercised: metadata populating on the first poll, altitude
+producing a real curve, and auto-stop firing only after on-ground has held.
+Point **Settings → Test API URL** at it; that config is probed ahead of the
+bundled ones.
+
+### Adding an airline
+
+The plugin system's premise is that a new airline needs a JSON config and no
+code, and `SecondAirlineShapeTests` exists to keep that true — it parses an
+array-nested shape with real numbers and a differently spelled boolean, using
+mappings alone.
+
+To add one, capture the portal's response in the air (the browser on the
+aircraft WiFi will show it), save it as a fixture, write the field mappings, and
+add a test asserting the values *and* that landing is detectable. Without that
+last assertion, auto-stop can silently never fire for that airline.

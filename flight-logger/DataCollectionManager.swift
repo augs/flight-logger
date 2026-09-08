@@ -258,10 +258,11 @@ final class DataCollectionManager {
         // are normalised to nil here rather than at every read site.
         //
         // Measured 2026-09-08: speed was invalid in 35/35 samples across a
-        // 37-minute train journey. That is a consequence of the keep-alive
-        // running at kCLLocationAccuracyThreeKilometers — coarse cell/WiFi
-        // fixes carry no Doppler speed. Raising accuracy would fix it and cost
-        // battery, which the same run showed is already the binding constraint.
+        // 37-minute journey. That journey was on a subway, with no satellite
+        // signal — the fixes were cell/WiFi triangulation, which carries no
+        // Doppler speed. Expect the same in an aircraft cabin. Treat GPS speed
+        // and altitude as opportunistic rather than relied upon; the barometer
+        // is the dependable vertical source in both environments.
         let speed = (fix?.speed).flatMap { $0 >= 0 ? $0 : nil }
         let verticalAccuracy = fix?.verticalAccuracy
         let altitude = (verticalAccuracy ?? -1) > 0 ? fix?.altitude : nil

@@ -411,25 +411,32 @@ quantities and the disagreement is the interesting part.
 Poor fixes are filtered from the chart (accuracy must be positive and under
 50 m) but still stored, so a bad fix stays distinguishable from no fix.
 
-**Measured on device 2026-09-08 — GPS is far weaker than expected:**
+**Measured on device 2026-09-08, with an important confound:**
 
-- **Speed was invalid in 35/35 samples** across a 37-minute moving journey.
-  `CLLocation.speed` needs a GNSS-quality fix, and the keep-alive deliberately
-  runs at `kCLLocationAccuracyThreeKilometers`, where coarse cell/WiFi fixes
-  carry no Doppler speed at all.
-- Altitude did vary but poorly: −9 m to 23 m with 13–40 m vertical accuracy,
-  visibly lagging the barometer's far cleaner profile over the same minutes.
+- Speed was invalid in 35/35 samples, and altitude was coarse (−9 m to 23 m at
+  13–40 m accuracy), visibly lagging the barometer over the same minutes.
+- **That run was on a subway — underground, with no satellite signal.** The
+  fixes were cell/WiFi triangulation, which carries no Doppler speed and gives
+  poor altitude by construction. The result says nothing about GPS quality in
+  the open, and an earlier note here wrongly attributed it to the keep-alive's
+  `kCLLocationAccuracyThreeKilometers` setting. That claim was unsupported.
 
 CoreLocation signals "no value" as a negative number, so invalid speed and
 altitude are now normalised to nil at capture rather than storing a literal
-−1 that would be charted as a real measurement.
+−1 that would be charted as a real measurement. That fix stands regardless.
 
-**Decision: do not raise location accuracy to fix this.** The same run measured
-100% → 95% battery in 37 minutes (~8%/hour), so power is the binding constraint,
-and higher accuracy is exactly what costs it. The barometer already covers
-vertical profile better, and ground speed comes from the airline API when
-present. GPS speed on a no-API flight is a real gap, but not one worth paying
-for at that rate. See #26.
+**Where this leaves GPS:** an aircraft cabin is much closer to the subway case
+than to an open sky — a metal fuselage, with fixes unreliable outside a window
+seat. So GPS altitude and speed should be treated as **opportunistic extras**,
+not a data source the app leans on. The barometer is the dependable vertical
+measurement in exactly the environments this app targets, and ground speed
+comes from the airline API when there is one.
+
+Not worth raising location accuracy to chase: the signal is the limit, not the
+setting, and accuracy is also what costs battery (see #26).
+
+Still untested, if it ever matters: GPS quality outdoors with a clear sky.
+Nothing in the app depends on it.
 
 ### 24. Motion / turbulence — requires opt-in
 

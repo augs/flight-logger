@@ -100,7 +100,20 @@ final class RuuviTagScanner: NSObject {
     private(set) var historyState: HistoryState = .idle
     private(set) var lastSyncResult: SyncResult = .never
 
-    private static let historyTimeoutSeconds: TimeInterval = 30
+    /// Fine-grained trace of the last sync attempt: which GATT stage was
+    /// reached and how long after the attempt began. Connecting in background
+    /// succeeds but frames never arrive, so knowing the exact stall point
+    /// matters more than the coarse HistoryState.
+    private(set) var historyTrace: String = ""
+    private var historyStarted: Date?
+
+    private func trace(_ stage: String) {
+        let dt = historyStarted.map { String(format: "%.1f", Date().timeIntervalSince($0)) } ?? "?"
+        historyTrace += (historyTrace.isEmpty ? "" : " ") + "\(stage)@\(dt)s"
+        logger.info("History stage: \(stage, privacy: .public) @\(dt, privacy: .public)s")
+    }
+
+    private static let historyTimeoutSeconds: TimeInterval = 45
 
     /// Identifier of a tag we've seen before, persisted so history sync can
     /// connect without scanning — which is the only way it can work in the
@@ -114,6 +127,9 @@ final class RuuviTagScanner: NSObject {
     }
 
     private static let knownTagKey = "knownRuuviTagIdentifier"
+
+    /// Count of raw NUS TX notifications seen this sync, for diagnostics.
+    private var rawFrameCount = 0
 
     private var historyPeripheral: CBPeripheral?
     private var historyRXChar: CBCharacteristic?
@@ -292,7 +308,10 @@ final class RuuviTagScanner: NSObject {
         historySince = since
         historyCompletion = completion
         historySamples = []
+        rawFrameCount = 0
         historyState = .connecting
+        historyStarted = Date()
+        historyTrace = ""
         wasScanningBeforeSync = (status == .scanning || isFound(status))
 
         // Suspend live scanning — a connection would silently kill it anyway.
@@ -307,7 +326,7 @@ final class RuuviTagScanner: NSObject {
         // Preferred path: connect to the remembered tag without scanning.
         if let known = knownTagIdentifier,
            let peripheral = cm.retrievePeripherals(withIdentifiers: [known]).first {
-            logger.info("History sync: connecting to known tag (no scan)")
+            trace("retrieved")
             connectForHistory(peripheral)
             return
         }
@@ -315,7 +334,7 @@ final class RuuviTagScanner: NSObject {
         // Fallback: we've never seen the tag, so we have to discover it first.
         // Only viable in the foreground.
         cm.scanForPeripherals(withServices: nil, options: nil)
-        logger.info("History sync: no known tag, scanning to discover one")
+        trace("scanning")
     }
 
     /// Manually trigger a sync for the whole active session. Exposed for the
@@ -386,11 +405,13 @@ final class RuuviTagScanner: NSObject {
         let completion = historyCompletion
         historyCompletion = nil
 
-        // Resume live advertisement scanning if it was running before.
-        if wasScanningBeforeSync {
+        // Always resume live scanning if a session is still active. Gating this
+        // on `wasScanningBeforeSync` could leave the app silently not scanning
+        // after a sync, which looks exactly like a hung scan to the user.
+        wasScanningBeforeSync = false
+        if flightSession != nil {
             beginScan()
         }
-        wasScanningBeforeSync = false
 
         completion?(saved)
     }
@@ -505,7 +526,7 @@ extension RuuviTagScanner: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         guard peripheral === historyPeripheral else { return }
         historyState = .downloading(frames: 0)
-        logger.info("History sync: connected, discovering NUS")
+        trace("connected")
         peripheral.discoverServices([Self.nusServiceUUID])
     }
 
@@ -536,6 +557,7 @@ extension RuuviTagScanner: CBPeripheralDelegate {
             finishHistorySync(error: "Tag has no NUS service — history unsupported on this firmware")
             return
         }
+        trace("services")
         peripheral.discoverCharacteristics([Self.nusRXCharUUID, Self.nusTXCharUUID], for: service)
     }
 
@@ -550,6 +572,7 @@ extension RuuviTagScanner: CBPeripheralDelegate {
             return
         }
         historyRXChar = rx
+        trace("chars")
         // The log request goes out only once notifications are actually live,
         // otherwise the reply stream is missed.
         peripheral.setNotifyValue(true, for: tx)
@@ -562,13 +585,44 @@ extension RuuviTagScanner: CBPeripheralDelegate {
         }
         guard characteristic.isNotifying, let rx = historyRXChar else { return }
 
+        trace("notifying")
         let request = RuuviHistoryProtocol.logReadRequest(since: historySince)
+        let hex = request.map { String(format: "%02X", $0) }.joined(separator: " ")
+        logger.info("History request bytes: \(hex, privacy: .public) (peripheral state \(peripheral.state.rawValue))")
         peripheral.writeValue(request, for: rx, type: .withResponse)
         logger.info("History sync: requested log since \(self.historySince, privacy: .public)")
     }
 
+    func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: (any Error)?) {
+        if let error {
+            // Previously unhandled, so a rejected write looked identical to the
+            // tag simply not answering.
+            finishHistorySync(error: "Log request rejected: \(error.localizedDescription)")
+        } else {
+            trace("written")
+        }
+    }
+
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: (any Error)?) {
+        // Log every notification, not just NUS TX, so "no frames" can be
+        // distinguished from "frames arriving on an unexpected characteristic".
+        if let error {
+            logger.error("Characteristic update error: \(error.localizedDescription, privacy: .public)")
+        }
+        if characteristic.uuid != Self.nusTXCharUUID {
+            logger.info("Update on unexpected characteristic \(characteristic.uuid.uuidString, privacy: .public)")
+        }
         guard characteristic.uuid == Self.nusTXCharUUID, let data = characteristic.value else { return }
+
+        // Dump the first frames verbatim. The tag answers, but the payload was
+        // being rejected by the parser — without the raw bytes there is no way
+        // to tell a heartbeat from a malformed log frame.
+        rawFrameCount += 1
+        if rawFrameCount <= 8 {
+            let hex = data.map { String(format: "%02X", $0) }.joined(separator: " ")
+            let parsed = RuuviHistoryProtocol.parse(data)
+            logger.info("TX frame \(self.rawFrameCount) len=\(data.count) \(hex, privacy: .public) -> \(String(describing: parsed), privacy: .public)")
+        }
 
         switch RuuviHistoryProtocol.parse(data) {
         case .sample(let sample):

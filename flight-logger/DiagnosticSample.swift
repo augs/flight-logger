@@ -42,6 +42,18 @@ final class DiagnosticSample {
     var networkMilliseconds: Double
     var networkError: String
 
+    /// Current history-sync state and the outcome of the last one, so periodic
+    /// sync can be verified from a run with no debugger attached.
+    ///
+    /// Property-level defaults are required, not optional style: SwiftData's
+    /// lightweight migration cannot backfill a mandatory attribute that has no
+    /// default, and adding these without one made the app fail to launch
+    /// against an existing store. A default in `init` does not count.
+    var historySyncState: String = ""
+    var historySyncResult: String = ""
+    /// GATT stage trace of the last sync attempt, e.g. "retrieved@0.1s connected@16.2s".
+    var historySyncTrace: String = ""
+
     init(
         timestamp: Date = Date(),
         appState: String,
@@ -53,7 +65,10 @@ final class DiagnosticSample {
         locationStatus: String,
         networkOK: Bool,
         networkMilliseconds: Double,
-        networkError: String = ""
+        networkError: String = "",
+        historySyncState: String = "",
+        historySyncResult: String = "",
+        historySyncTrace: String = ""
     ) {
         self.timestamp = timestamp
         self.appState = appState
@@ -66,5 +81,8 @@ final class DiagnosticSample {
         self.networkOK = networkOK
         self.networkMilliseconds = networkMilliseconds
         self.networkError = networkError
+        self.historySyncState = historySyncState
+        self.historySyncResult = historySyncResult
+        self.historySyncTrace = historySyncTrace
     }
 }

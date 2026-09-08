@@ -211,6 +211,35 @@ frames are pinned as regression tests in `RuuviHardwareCaptureTests`.
 any history download, and much coarser than the live advertisement stream.
 Adjustable in Ruuvi Station if finer flight data is wanted.
 
+### Two frame types arrive on NUS TX
+
+Verified on device. Once connected, the tag sends **both**:
+
+- **18-byte heartbeat frames** beginning `05` — a Data Format 5 payload
+  carrying the tag's *current* reading, streamed continuously while connected.
+  Not log data; the parser rejects them.
+- **11-byte log frames** (`3A 31 10 …`) — the actual history, sent in response
+  to the log-read request.
+
+This matters: an early diagnosis of "the tag never answers the log request" was
+wrong. Heartbeats were arriving the whole time and being discarded, so
+`historySamples` stayed empty and the sync looked dead. Anything debugging this
+path must distinguish the two rather than counting notifications.
+
+Worth exploring: heartbeats are live readings delivered *over the connection*,
+which works in the background where advertisement scanning does not. That may be
+a better source of background live data than periodic log sync. See TODO.md #19.
+
+### Periodic sync is background-only
+
+Foreground live scanning is far higher resolution (~5s) than the tag's ~5 min
+log, and `syncHistory` must `stopScan()` for the duration of a connection.
+Running periodic sync in the foreground therefore stops better data being
+collected in order to fetch worse data — and with a long timeout it starves
+scanning badly enough to look like a hang. Periodic sync runs only while
+backgrounded, where live BLE is dead anyway. Session-end and manual syncs are
+unconditional.
+
 ### Measured background behaviour — 2026-09-07, iPhone 17
 
 App launched from the Home screen (no debugger), screen locked, 37 samples over

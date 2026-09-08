@@ -1,5 +1,57 @@
 # Changelog
 
+## 2026-09-07 — History Sync Verified End-to-End on Device
+
+History sync now demonstrably works on hardware: log frames downloaded from the
+tag's flash, parsed, deduped and persisted. Database rows match the captured
+wire bytes exactly (raw 2256/5547/100554 → 22.56°C / 55.47% / 1005.54 hPa at the
+tag's own timestamp).
+
+### Fixed: app failed to launch (migration crash)
+- Adding two `String` properties to `DiagnosticSample` broke launch against any
+  existing store: SwiftData lightweight migration cannot backfill a mandatory
+  attribute with no **property-level** default. A default in `init` does not
+  count
+- `ModelStore` no longer bricks the app on a load failure. It moves the
+  unreadable store aside (never deletes — it may hold recoverable flight data)
+  and starts fresh, so the app still opens away from a laptop
+
+### Fixed: periodic sync starved foreground scanning
+- `syncHistory` calls `stopScan()` for its whole duration, so with a 90s
+  timeout on a 2-minute retry cycle the app scanned only ~30s in every 120s.
+  It presented as "stuck scanning for RuuviTag"
+- Root cause was the policy, not the timeout: foreground live scanning is ~5s
+  resolution versus the tag's ~5 min log, so syncing there trades better data
+  for worse. **Periodic sync now runs only while backgrounded**, where live BLE
+  is dead. Session-end and manual syncs are unconditional
+- Timeout 90s → 45s
+- Scanning now always resumes after a sync while a session is active; it was
+  gated on `wasScanningBeforeSync` and could silently leave the app not scanning
+
+### Diagnosed: "the tag never answers" was wrong
+- Two frame types arrive on NUS TX. 18-byte heartbeats beginning `05` (a Data
+  Format 5 payload with the tag's current reading, streamed while connected),
+  and 11-byte log frames. Heartbeats were arriving the whole time and being
+  correctly discarded, so `historySamples` stayed empty and the sync looked dead
+- Added GATT stage tracing (`retrieved@ connected@ services@ chars@ notifying@
+  written@`) and a capped raw-frame hex dump, which is what made this visible
+- Added `didWriteValueFor`: a rejected log request was previously
+  indistinguishable from the tag not answering
+
+### Fixed: flaky UI tests
+- An active session keeps the app running after a test ends — the location
+  keep-alive working as designed — so `launch()` failed with "current state:
+  Running Background". Both UI test classes now terminate in setUp/tearDown
+- Replaced the template `testExample()`, which asserted nothing, with
+  `testLaunchesToForeground()`
+
+### Backlog
+- New #19: NUS heartbeat frames as a background live-data source. They arrive
+  over the connection, so unlike advertisements they should work backgrounded —
+  potentially much better resolution than 15-minute log sync
+
+---
+
 ## 2026-09-07 — Periodic History Sync, Session Cap, Sync UX
 
 Backlog items #9, #16 and #17. (#11 turned out to already be complete.)

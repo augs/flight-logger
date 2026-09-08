@@ -15,6 +15,14 @@ final class flight_loggerUITestsLaunchTests: XCTestCase {
 
     override func setUpWithError() throws {
         continueAfterFailure = false
+        // See flight_loggerUITests: an active recording session keeps the app
+        // alive between tests, and `launch()` fails against a lingering
+        // background instance.
+        XCUIApplication().terminate()
+    }
+
+    override func tearDownWithError() throws {
+        XCUIApplication().terminate()
     }
 
     @MainActor

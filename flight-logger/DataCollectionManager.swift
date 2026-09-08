@@ -160,13 +160,16 @@ final class DataCollectionManager {
                     locationStatus: String(describing: self.locationKeepAlive.status),
                     networkOK: net.ok,
                     networkMilliseconds: net.ms,
-                    networkError: net.error
+                    networkError: net.error,
+                    historySyncState: String(describing: self.bleScanner.historyState),
+                    historySyncResult: String(describing: self.bleScanner.lastSyncResult),
+                    historySyncTrace: self.bleScanner.historyTrace
                 )
                 context.insert(sample)
                 try? context.save()
 
                 self.enforceSessionLimit(session)
-                self.syncHistoryIfDue(session)
+                self.syncHistoryIfDue(session, appState: state)
 
                 self.logger.info(
                     "alive — state=\(state, privacy: .public) gap=\(String(format: "%.1f", gap), privacy: .public)s readings=\(self.bleScanner.readingCount) store=\(storeReadable) net=\(net.ok)/\(Int(net.ms))ms"
@@ -191,8 +194,17 @@ final class DataCollectionManager {
     /// slot, so failures are expected and non-fatal — the next tick retries,
     /// which is the "retry opportunistically" behaviour we want when another
     /// app is holding the tag.
-    private func syncHistoryIfDue(_ session: FlightSession) {
+    private func syncHistoryIfDue(_ session: FlightSession, appState: String) {
         guard bleScanner.historyState == .idle else { return }
+
+        // Foreground: live advertisement scanning works and is far higher
+        // resolution than the tag's ~5 min log. Syncing there would stop
+        // scanning for the duration of a connection to fetch data we're already
+        // collecting better — a straight downgrade, and it looks like a hung
+        // scan to the user. Background is where live BLE is dead and the log is
+        // the only source, so that's the only place periodic sync earns its
+        // cost. Session-end and manual syncs are unaffected.
+        guard appState == "background" else { return }
 
         // Back off less after a failure than after a success: a failure usually
         // means the tag's connection slot was busy, which tends to clear.

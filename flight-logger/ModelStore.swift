@@ -39,14 +39,51 @@ enum ModelStore {
     static func makeContainer() -> ModelContainer {
         prepareDirectory()
 
-        let configuration = ModelConfiguration(schema: schema, url: storeURL)
-
         do {
-            let container = try ModelContainer(for: schema, configurations: [configuration])
+            let container = try open()
             applyProtection()
             return container
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            // A failed migration used to be fatal, which bricked the app until a
+            // new build could be installed — a bad outcome for something meant to
+            // be used away from a laptop. Move the unreadable store aside instead
+            // (never delete it: it may hold flight data recoverable later) and
+            // start fresh so the app still launches.
+            logger.error("Store failed to load, quarantining: \(error.localizedDescription, privacy: .public)")
+            quarantineStore()
+
+            do {
+                let container = try open()
+                applyProtection()
+                logger.error("Recovered with a fresh store; previous data quarantined")
+                return container
+            } catch {
+                fatalError("Could not create ModelContainer even after quarantine: \(error)")
+            }
+        }
+    }
+
+    private static func open() throws -> ModelContainer {
+        let configuration = ModelConfiguration(schema: schema, url: storeURL)
+        return try ModelContainer(for: schema, configurations: [configuration])
+    }
+
+    /// Rename the store and its sidecars out of the way, preserving them.
+    private static func quarantineStore() {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+
+        for suffix in ["", "-wal", "-shm"] {
+            let from = URL(fileURLWithPath: storeURL.path(percentEncoded: false) + suffix)
+            guard FileManager.default.fileExists(atPath: from.path(percentEncoded: false)) else { continue }
+
+            let to = URL(fileURLWithPath: storeURL.path(percentEncoded: false) + ".quarantined-\(stamp)" + suffix)
+            do {
+                try FileManager.default.moveItem(at: from, to: to)
+                logger.error("Quarantined \(from.lastPathComponent, privacy: .public) -> \(to.lastPathComponent, privacy: .public)")
+            } catch {
+                logger.error("Could not quarantine \(from.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 

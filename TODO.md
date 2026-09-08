@@ -237,6 +237,22 @@ remembers the tag's identifier and uses
 The data watermark only advances on success, so a failed sync re-requests the
 same window instead of losing it.
 
+### 19. Investigate NUS heartbeat frames as a background live-data source
+
+Verified on device: while connected over NUS, the tag continuously streams
+18-byte Data Format 5 heartbeat frames carrying its *current* reading, alongside
+any log frames. These arrive over the **connection**, so unlike advertisement
+scanning they should work while backgrounded.
+
+If that holds, holding a connection during a flight could give live background
+data at the tag's broadcast rate rather than its ~5 min log cadence — a large
+resolution win over periodic history sync.
+
+Open questions: battery cost of a persistent connection; whether it blocks
+Ruuvi Station entirely for the flight; whether iOS keeps delivering
+notifications indefinitely in the background. The parser currently discards
+these frames (`parse` returns nil for non-log sources).
+
 ### 18. Consider lowering the tag's log interval
 
 Observed cadence was ~301s (5 min), which is coarse for a flight profile.

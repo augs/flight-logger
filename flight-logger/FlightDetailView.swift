@@ -8,6 +8,9 @@
 import SwiftUI
 import SwiftData
 import Charts
+#if os(iOS)
+import UIKit
+#endif
 
 struct FlightDetailView: View {
     let session: FlightSession
@@ -16,6 +19,9 @@ struct FlightDetailView: View {
     @State private var showPressure = true
     @State private var showHumidity = true
     @State private var showAltitude = true
+    @State private var exportFormat: SessionExport.Format?
+    @State private var exportURLs: [URL] = []
+    @State private var exportError: String?
 
     var body: some View {
         ScrollView {
@@ -27,6 +33,35 @@ struct FlightDetailView: View {
                 }
             }
             .padding()
+        }
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Menu {
+                    ForEach(SessionExport.Format.allCases) { format in
+                        Button {
+                            export(format)
+                        } label: {
+                            VStack(alignment: .leading) {
+                                Text(format.label)
+                                Text(format.detail).font(.caption)
+                            }
+                        }
+                    }
+                } label: {
+                    Label("Export", systemImage: "square.and.arrow.up")
+                }
+                .disabled(session.sensorReadings.isEmpty && session.flightDataPoints.isEmpty)
+            }
+        }
+        .sheet(isPresented: Binding(get: { !exportURLs.isEmpty },
+                                    set: { if !$0 { exportURLs = [] } })) {
+            ShareSheet(items: exportURLs)
+        }
+        .alert("Export failed", isPresented: Binding(get: { exportError != nil },
+                                                     set: { if !$0 { exportError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(exportError ?? "")
         }
         .navigationTitle(session.displayTitle)
         #if os(iOS)
@@ -122,6 +157,16 @@ struct FlightDetailView: View {
         )
         .padding()
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func export(_ format: SessionExport.Format) {
+        do {
+            exportURLs = try SessionExport.write(session, as: format)
+        } catch {
+            // Surfaced rather than swallowed: a silent no-op after tapping
+            // Export is indistinguishable from the feature being broken.
+            exportError = error.localizedDescription
+        }
     }
 
     // MARK: - Helpers

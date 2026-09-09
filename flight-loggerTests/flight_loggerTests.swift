@@ -1048,3 +1048,200 @@ struct ConfigDecodingTests {
         }
     }
 }
+
+// MARK: - Cabin air psychrometrics
+
+/// Checked against published reference values rather than against the same
+/// formulas restated — a test that recomputes the implementation proves nothing.
+struct CabinAirTests {
+
+    /// 20 °C / 50% RH is a standard textbook case: ~8.65 g/m³ absolute humidity
+    /// and ~7.26 g/kg mixing ratio at sea level.
+    @Test func matchesReferenceValuesAtRoomConditions() throws {
+        let ah = CabinAir.absoluteHumidity(temperatureC: 20, humidityPercent: 50)
+        #expect(abs(ah - 8.65) < 0.05, "absolute humidity was \(ah)")
+
+        let w = try #require(CabinAir.mixingRatio(temperatureC: 20, humidityPercent: 50, pressureHPa: 1013.25))
+        #expect(abs(w - 7.26) < 0.05, "mixing ratio was \(w)")
+
+        let dp = try #require(CabinAir.dewPoint(temperatureC: 20, humidityPercent: 50))
+        #expect(abs(dp - 9.3) < 0.2, "dew point was \(dp)")
+    }
+
+    @Test func saturationVapourPressureMatchesKnownPoints() {
+        // 23.4 hPa at 20 °C, 12.28 hPa at 10 °C, 6.11 hPa at 0 °C.
+        #expect(abs(CabinAir.saturationVapourPressure(temperatureC: 20) - 23.4) < 0.1)
+        #expect(abs(CabinAir.saturationVapourPressure(temperatureC: 10) - 12.28) < 0.1)
+        #expect(abs(CabinAir.saturationVapourPressure(temperatureC: 0) - 6.11) < 0.02)
+    }
+
+    /// The whole reason pressure is an input. The same temperature and humidity
+    /// at cruise pressure is a materially different amount of water, and using
+    /// sea-level pressure would overstate it.
+    @Test func pressureMattersToMixingRatio() throws {
+        let ground = try #require(CabinAir.mixingRatio(temperatureC: 22, humidityPercent: 12, pressureHPa: 1013.25))
+        let cruise = try #require(CabinAir.mixingRatio(temperatureC: 22, humidityPercent: 12, pressureHPa: 800))
+
+        #expect(cruise > ground, "lower pressure means more water per kg of dry air")
+        #expect(abs(cruise / ground - 1013.25 / 800) < 0.02, "ratio should track the pressure ratio")
+    }
+
+    /// The point of the metric: a warm dry cabin and a cool dry cabin can read
+    /// the same RH while holding different amounts of water.
+    @Test func equalRelativeHumidityIsNotEqualWater() throws {
+        let cool = try #require(CabinAir.mixingRatio(temperatureC: 19, humidityPercent: 12, pressureHPa: 800))
+        let warm = try #require(CabinAir.mixingRatio(temperatureC: 24, humidityPercent: 12, pressureHPa: 800))
+
+        // Same RH, ~40% more water in the warmer cabin.
+        #expect(warm > cool * 1.3, "cool=\(cool) warm=\(warm)")
+    }
+
+    @Test func cabinAltitudeMatchesStandardAtmosphere() throws {
+        #expect(abs(try #require(CabinAir.pressureAltitudeMeters(pressureHPa: 1013.25))) < 1)
+
+        // 800 hPa ≈ 6,400 ft; 750 hPa ≈ 8,100 ft — typical cruise cabin range.
+        let ft800 = try #require(CabinAir.pressureAltitudeFeet(pressureHPa: 800))
+        #expect(abs(ft800 - 6394) < 30, "800 hPa gave \(ft800) ft")
+
+        let ft750 = try #require(CabinAir.pressureAltitudeFeet(pressureHPa: 750))
+        #expect(abs(ft750 - 8091) < 30, "750 hPa gave \(ft750) ft")
+    }
+
+    @Test func rejectsImpossibleInputs() {
+        // Vapour pressure above total pressure is a sensor fault, not humid air.
+        #expect(CabinAir.mixingRatio(temperatureC: 40, humidityPercent: 100, pressureHPa: 50) == nil)
+        #expect(CabinAir.mixingRatio(temperatureC: 20, humidityPercent: 50, pressureHPa: 0) == nil)
+        #expect(CabinAir.pressureAltitudeMeters(pressureHPa: 0) == nil)
+        #expect(CabinAir.dewPoint(temperatureC: 20, humidityPercent: 0) == nil)
+    }
+
+    /// A real cruise cabin holds roughly a third the water of ground level —
+    /// the effect the whole project is trying to measure.
+    @Test func cruiseCabinIsMarkedlyDrierThanGround() throws {
+        let ground = try #require(CabinAir.mixingRatio(temperatureC: 22, humidityPercent: 55, pressureHPa: 1013))
+        let cruise = try #require(CabinAir.mixingRatio(temperatureC: 22, humidityPercent: 12, pressureHPa: 800))
+
+        #expect(ground > 8, "ground mixing ratio was \(ground)")
+        #expect(cruise < 3, "cruise mixing ratio was \(cruise)")
+    }
+}
+
+// MARK: - Session export
+
+struct SessionExportTests {
+
+    static func session() -> FlightSession {
+        let start = Date(timeIntervalSince1970: 1_757_000_000)
+        let s = FlightSession(flightNumber: "UA 1885", airline: "United",
+                              origin: "EWR", destination: "SFO",
+                              aircraftModel: "Boeing 777-200",
+                              recordingStartedAt: start)
+        s.sensorReadings = [
+            SensorReading(timestamp: start, temperatureCelsius: 22.0,
+                          humidityPercent: 55.0, pressureHPa: 1013.25, source: .heartbeat),
+            SensorReading(timestamp: start.addingTimeInterval(3600), temperatureCelsius: 22.0,
+                          humidityPercent: 12.0, pressureHPa: 800.0, source: .history),
+        ]
+        s.flightDataPoints = [
+            FlightDataPoint(timestamp: start, altitudeFt: 35000, groundSpeedMPH: 433,
+                            outsideAirTempF: -2, flightStatus: "In Flight, on time")
+        ]
+        s.deviceReadings = [
+            DeviceReading(timestamp: start, pressureHPa: 1012.4, gpsAltitudeMeters: 120,
+                          gpsVerticalAccuracy: 8, gpsSpeedMPS: 3.2)
+        ]
+        return s
+    }
+
+    /// Derived columns are the point: a downstream query should not have to
+    /// redo the psychrometrics, and RH alone cannot be compared across cabins.
+    @Test func csvCarriesDerivedHumidityColumns() throws {
+        let files = SessionExport.csvFiles(for: Self.session())
+        let readings = try #require(files.first { $0.name.hasSuffix("-readings.csv") }).contents
+
+        #expect(readings.contains("mixing_ratio_gkg"))
+        #expect(readings.contains("cabin_alt_ft"))
+
+        let rows = readings.split(separator: "\n")
+        #expect(rows.count == 3, "header plus two readings")
+
+        // Cruise row: 800 hPa is roughly a 6,400 ft cabin, and the mixing ratio
+        // must reflect cruise pressure rather than sea level.
+        let cruise = String(rows[2])
+        #expect(cruise.contains("history"))
+        let cols = cruise.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        let mixingRatio = try #require(Double(cols[4]))
+        let cabinAlt = try #require(Double(cols[7]))
+        #expect(abs(mixingRatio - 2.48) < 0.05, "mixing ratio \(mixingRatio)")
+        #expect(abs(cabinAlt - 6394) < 30, "cabin altitude \(cabinAlt)")
+    }
+
+    /// Flight status genuinely contains commas, which would silently shift
+    /// every later column.
+    @Test func csvQuotesFieldsContainingCommas() {
+        let files = SessionExport.csvFiles(for: Self.session())
+        let flight = files.first { $0.name.hasSuffix("-flightdata.csv") }?.contents ?? ""
+        #expect(flight.contains("\"In Flight, on time\""))
+
+        #expect(SessionExport.csvField("plain") == "plain")
+        #expect(SessionExport.csvField("a,b") == "\"a,b\"")
+        #expect(SessionExport.csvField("say \"hi\"") == "\"say \"\"hi\"\"\"")
+    }
+
+    /// Spaces and commas are structural in line protocol, so an unescaped
+    /// aircraft model or flight number would corrupt the record.
+    @Test func lineProtocolEscapesTags() {
+        let out = SessionExport.lineProtocol(for: Self.session())
+
+        #expect(out.contains("aircraft=Boeing\\ 777-200"))
+        #expect(out.contains("flight=UA\\ 1885"))
+        #expect(SessionExport.lineProtocolTag("a b,c=d") == "a\\ b\\,c\\=d")
+
+        // One line per point across the three measurements.
+        let lines = out.split(separator: "\n")
+        #expect(lines.filter { $0.hasPrefix("cabin,") }.count == 2)
+        #expect(lines.filter { $0.hasPrefix("flight,") }.count == 1)
+        #expect(lines.filter { $0.hasPrefix("device,") }.count == 1)
+        // Nanosecond timestamps, as line protocol expects by default.
+        #expect(out.contains("1757000000000000000"))
+    }
+
+    @Test func jsonIncludesMetadataCoverageAndSeries() throws {
+        let text = SessionExport.json(for: Self.session())
+        let root = try #require(
+            JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+
+        #expect(root["flightNumber"] as? String == "UA 1885")
+        #expect(root["aircraftModel"] as? String == "Boeing 777-200")
+
+        let coverage = try #require(root["coverage"] as? [String: Any])
+        #expect(coverage["readings"] as? Int == 2)
+        #expect(coverage["backfilled"] as? Int == 1)
+
+        let readings = try #require(root["readings"] as? [[String: Any]])
+        #expect(readings.count == 2)
+        #expect(readings[0]["mixingRatioGKg"] != nil)
+        #expect(readings[1]["source"] as? String == "history")
+    }
+
+    /// Filenames land in a Files listing and need to be tellable apart.
+    @Test func fileNamesIdentifyTheFlight() {
+        let stem = SessionExport.fileStem(for: Self.session())
+        #expect(stem.hasPrefix("UA1885-"))
+        #expect(!stem.contains(" "), "spaces make command-line handling awkward")
+        #expect(!stem.contains("/"), "slashes would create directories")
+    }
+
+    /// A session with nothing recorded must still export cleanly rather than
+    /// producing a malformed file.
+    @Test func emptySessionExportsHeadersOnly() throws {
+        let empty = FlightSession(recordingStartedAt: Date())
+        let files = SessionExport.csvFiles(for: empty)
+
+        // Readings CSV and metadata only — no flight or device files.
+        #expect(files.count == 2)
+        let readings = try #require(files.first { $0.name.hasSuffix("-readings.csv") }).contents
+        #expect(readings.split(separator: "\n").count == 1, "header only")
+        #expect(SessionExport.lineProtocol(for: empty).isEmpty)
+    }
+}

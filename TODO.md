@@ -36,10 +36,12 @@ full cadence; the store writable while locked.
 
 ### Outstanding features
 
-**#13 Grafana export** · **#14 Live Activity** · **#24 Motion/turbulence
-(opt-in)** · **#25 HealthKit (opt-in)** · **#26 Battery investigation** ·
-**#27 Real airline captures** · **#28 Derived humidity metrics** ·
-**#29 Public data sharing** (design only — see `DATA_SHARING.md`)
+**#14 Live Activity** · **#24 Motion/turbulence (opt-in)** ·
+**#25 HealthKit (opt-in)** · **#26 Battery investigation** ·
+**#27 Real airline captures** · **#29 Public data sharing** (design only —
+see `DATA_SHARING.md`)
+
+Done since: **#13 export**, **#28 derived humidity metrics**.
 
 #27 is the highest-value and needs no code — one captured response from any
 flight is worth more than all the derived configs, and the app now stores the
@@ -682,7 +684,7 @@ not observed. A config that looks plausible and is wrong is worse than a missing
 one — it either probes a URL that never answers, or half-matches and records
 nonsense.
 
-### 28. Derived humidity metrics
+### 28. ✅ Derived humidity metrics
 
 Mixing ratio, absolute humidity, cabin altitude, cruise segmentation, and the
 humidity decay fit. Pure functions over data already recorded, so testable
@@ -708,9 +710,23 @@ The headline constraint: this would be the first time anything leaves the
 device, and `DESIGN.md` currently promises the opposite. That promise changing
 is the decision, not an implementation detail.
 
-### 13. Log export for Grafana
+### 13. ✅ Log export for Grafana
 
-Needs design first. Likely CSV or line-protocol export per session, shared via
+Three formats from one serialiser, chosen at export: CSV bundle (universal),
+InfluxDB line protocol (straight into a datasource, tagged by aircraft/flight/
+route so Grafana can filter without a join), and JSON (full fidelity, including
+`rawFirstResponse`).
+
+Every format carries the derived psychrometric columns rather than leaving each
+downstream query to redo them — mixing ratio, absolute humidity, dew point and
+cabin altitude alongside the raw values.
+
+Streams are separate files rather than one merged table: readings, flight data
+and device readings have different columns and cadences, so a single table would
+be mostly empty cells.
+
+**Still unverified on device.** The share sheet has only been exercised in
+tests; the export menu itself has never been tapped on hardware. Likely CSV or line-protocol export per session, shared via
 the system share sheet. Decide on schema, timestamp format, and whether to
 export raw rows or a resampled series.
 

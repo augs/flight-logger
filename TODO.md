@@ -23,6 +23,7 @@ require reading the whole file.
 | B4 | `panasonic.json` maps no aircraft model | Panasonic exposes `tail_number` (now stored as registration) but no model name |
 | B5 | Two `Linking to …` log lines per connect | Cosmetic. `peripheral.state` has not transitioned when the second call arrives in the same run-loop turn |
 | B6 | Battery ~8%/hour with link + keep-alive + barometer | Most of a battery over a long-haul. Measured once, from full, on a train — an upper bound. See #26 |
+| B7 | All 4 UI tests fail on macOS: `Failed to activate application (current state: Running Background)` | Deterministic, not flaky — reproduced 3/3 runs (twice via the Xcode MCP, once via plain `xcodebuild`), each test burning its 60–120s activation timeout, so a full run costs ~7 wasted minutes. The app launches but never foregrounds under the test harness. Unit tests (78) are unaffected. Suspect the Catalyst/macOS destination rather than the tests themselves — worth confirming against an iOS Simulator destination before touching the test code |
 
 None are data-corrupting; B1–B3 all fail toward *not stopping* a recording,
 which is the safe direction.

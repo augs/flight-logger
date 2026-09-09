@@ -38,7 +38,8 @@ full cadence; the store writable while locked.
 
 **#13 Grafana export** · **#14 Live Activity** · **#24 Motion/turbulence
 (opt-in)** · **#25 HealthKit (opt-in)** · **#26 Battery investigation** ·
-**#27 Real airline captures**
+**#27 Real airline captures** · **#28 Derived humidity metrics** ·
+**#29 Public data sharing** (design only — see `DATA_SHARING.md`)
 
 #27 is the highest-value and needs no code — one captured response from any
 flight is worth more than all the derived configs, and the app now stores the
@@ -680,6 +681,32 @@ Deliberately **not** doing: guessing endpoints or schemas for airlines we have
 not observed. A config that looks plausible and is wrong is worse than a missing
 one — it either probes a URL that never answers, or half-matches and records
 nonsense.
+
+### 28. Derived humidity metrics
+
+Mixing ratio, absolute humidity, cabin altitude, cruise segmentation, and the
+humidity decay fit. Pure functions over data already recorded, so testable
+without hardware.
+
+Worth doing regardless of whether sharing is ever built: **relative humidity is
+the wrong thing to chart.** RH is a ratio to saturation and saturation depends
+on temperature, so two cabins at the same RH and different temperatures hold
+different amounts of water. Mixing ratio is conserved under compression and
+heating, which is what makes it comparable between aircraft — and between one
+flight and the next.
+
+Formulas and reasoning in `DATA_SHARING.md`.
+
+### 29. Public data sharing — design only
+
+Contributing anonymised flight data to a public dataset so cabin humidity can be
+compared across aircraft types. **Designed, not built** — see `DATA_SHARING.md`
+for the schema, the two consent tiers, ADS-B enrichment via OpenSky, and six
+open questions that need answering before any code.
+
+The headline constraint: this would be the first time anything leaves the
+device, and `DESIGN.md` currently promises the opposite. That promise changing
+is the decision, not an implementation detail.
 
 ### 13. Log export for Grafana
 

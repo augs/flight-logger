@@ -11,6 +11,8 @@ struct SettingsView: View {
     @AppStorage("recordingStartMode") private var startMode: RecordingStartMode = .autoWithFallback
     @AppStorage("unitPreference") private var unitPreference: UnitPreference = .system
     @AppStorage(AirlineConfigLoader.testURLKey) private var testAPIURL: String = ""
+    @AppStorage(HealthKitService.enabledKey) private var healthKitEnabled: Bool = false
+    @State private var health = HealthKitService()
 
     var body: some View {
         NavigationStack {
@@ -51,6 +53,29 @@ struct SettingsView: View {
                     Text("Units")
                 } footer: {
                     Text("Choose how altitude, speed, and temperature are displayed. System Default uses your device's region settings.")
+                }
+
+                Section {
+                    Toggle("Record health data", isOn: $healthKitEnabled)
+                    if healthKitEnabled, health.status == .unavailable {
+                        Label("Health data isn't available on this device",
+                              systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                } header: {
+                    Text("Health")
+                } footer: {
+                    Text("Reads heart rate, blood oxygen, HRV and respiratory rate recorded during a flight, so they can be compared against cabin conditions. Read-only, never written, and stays on your device.\n\nBlood oxygen cannot be requested on demand — Apple provides no way to trigger a reading — so samples appear only when your Watch takes one, usually while you are still.")
+                }
+                .onChange(of: healthKitEnabled) { _, enabled in
+                    // Turning the switch on is the consent, so that is when the
+                    // system prompt appears — nothing is requested at launch.
+                    if enabled {
+                        Task { await health.requestAuthorization() }
+                    } else {
+                        health.refreshStatus()
+                    }
                 }
 
                 Section {

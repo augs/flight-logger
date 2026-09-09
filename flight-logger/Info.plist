@@ -7,6 +7,8 @@
 		<string>bluetooth-central</string>
 		<string>location</string>
 	</array>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Reads heart rate, blood oxygen and respiratory rate recorded during a flight, so they can be compared against cabin conditions. Only read while a recording is active, and only if you turn it on in Settings.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>Reads the barometer to record cabin pressure during a flight, as a second source alongside your RuuviTag.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

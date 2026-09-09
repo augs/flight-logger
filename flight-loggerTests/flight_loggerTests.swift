@@ -1245,3 +1245,97 @@ struct SessionExportTests {
         #expect(SessionExport.lineProtocol(for: empty).isEmpty)
     }
 }
+
+// MARK: - HealthKit
+
+/// The query needs a device, a Watch and a flight; the rules around it do not.
+/// These cover the parts that would silently corrupt data.
+struct HealthKitTests {
+
+    /// HealthKit stores blood oxygen as a 0–1 fraction. Storing it unconverted
+    /// would record 0.97% instead of 97% — plausible-looking and wrong.
+    @Test func oxygenSaturationIsRescaledFromFraction() {
+        #expect(HealthKitService.canonicalValue(0.97, for: .oxygenSaturation) == 97)
+        #expect(HealthKitService.canonicalValue(1.0, for: .oxygenSaturation) == 100)
+
+        // Everything else is already in the unit we store.
+        #expect(HealthKitService.canonicalValue(72, for: .heartRate) == 72)
+        #expect(HealthKitService.canonicalValue(45, for: .heartRateVariability) == 45)
+        #expect(HealthKitService.canonicalValue(14, for: .respiratoryRate) == 14)
+    }
+
+    /// A bad reading charted alongside good ones distorts the axis for
+    /// everything else, so implausible values are dropped rather than stored.
+    @Test func plausibleRangesRejectNonsense() {
+        #expect(HealthMetric.oxygenSaturation.plausibleRange.contains(97))
+        #expect(!HealthMetric.oxygenSaturation.plausibleRange.contains(0.97))  // unconverted
+        #expect(!HealthMetric.oxygenSaturation.plausibleRange.contains(140))
+
+        #expect(HealthMetric.heartRate.plausibleRange.contains(58))
+        #expect(!HealthMetric.heartRate.plausibleRange.contains(0))
+        #expect(HealthMetric.respiratoryRate.plausibleRange.contains(14))
+    }
+
+    /// Watch data syncs late, so the same window queried twice returns
+    /// overlapping results. Merging must be idempotent or every refresh
+    /// duplicates the flight's health data.
+    @Test func mergeIsIdempotentAcrossRepeatedFetches() {
+        let now = Date()
+        let fetched: [(metric: HealthMetric, date: Date, value: Double, uuid: String)] = [
+            (.heartRate, now, 72, "A"),
+            (.heartRate, now.addingTimeInterval(60), 75, "B"),
+            (.oxygenSaturation, now, 97, "C"),
+        ]
+
+        let first = HealthSampleMerge.newRows(from: fetched, existingUUIDs: []) { m, d, v, u in
+            (m, d, v, u)
+        }
+        #expect(first.count == 3)
+
+        // Same fetch again, now that those UUIDs are stored.
+        let second = HealthSampleMerge.newRows(
+            from: fetched, existingUUIDs: ["A", "B", "C"]) { m, d, v, u in (m, d, v, u) }
+        #expect(second.isEmpty)
+
+        // A later sync brings one new sample alongside the old ones.
+        let third = HealthSampleMerge.newRows(
+            from: fetched + [(.heartRate, now.addingTimeInterval(120), 70, "D")],
+            existingUUIDs: ["A", "B", "C"]) { m, d, v, u in (m, d, v, u) }
+        #expect(third.count == 1)
+        #expect(third.first?.3 == "D")
+    }
+
+    /// A single fetch can itself contain repeats; the guard must cover that too.
+    @Test func duplicatesWithinOneFetchAreCollapsed() {
+        let now = Date()
+        let fetched: [(metric: HealthMetric, date: Date, value: Double, uuid: String)] = [
+            (.heartRate, now, 72, "A"),
+            (.heartRate, now, 72, "A"),
+        ]
+        let rows = HealthSampleMerge.newRows(from: fetched, existingUUIDs: []) { m, d, v, u in
+            (m, d, v, u)
+        }
+        #expect(rows.count == 1)
+    }
+
+    @Test func storedMetricRoundTrips() {
+        for metric in HealthMetric.allCases {
+            let sample = HealthSample(metric: metric, value: 1, sampleUUID: "x")
+            #expect(sample.healthMetric == metric)
+            #expect(!metric.unit.isEmpty)
+            #expect(!metric.label.isEmpty)
+        }
+        // Rows predating the field, or a future metric, must not crash.
+        let legacy = HealthSample(metric: .heartRate, value: 1, sampleUUID: "x")
+        legacy.metric = "somethingNew"
+        #expect(legacy.healthMetric == nil)
+    }
+
+    /// These series are sparse and irregular; a mean alone would hide that a
+    /// "reading" might be one measurement.
+    @Test func summaryShowsRangeAndCount() {
+        #expect(FlightDetailView.summary([97], unit: "%") == "97 % (1)")
+        #expect(FlightDetailView.summary([93, 97, 95], unit: "%") == "93–97 % (3)")
+        #expect(FlightDetailView.summary([], unit: "%") == "—")
+    }
+}

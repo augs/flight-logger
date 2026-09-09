@@ -493,7 +493,7 @@ Cost to check before committing: continuous accelerometer sampling is not free
 on battery, and the useful output is a summary statistic rather than raw
 samples — decide the aggregation window before storing anything.
 
-### 25. HealthKit: SpO2, heart rate, HRV — requires opt-in
+### 25. ◐ HealthKit: SpO2, heart rate, HRV — phone-side built, needs a capability
 
 **SpO2 is read-only and cannot be polled.** `HKQuantityTypeIdentifierOxygenSaturation`
 exists for reading, but there is no API anywhere in HealthKit to trigger a

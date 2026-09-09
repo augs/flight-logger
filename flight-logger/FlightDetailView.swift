@@ -14,6 +14,7 @@ import UIKit
 
 struct FlightDetailView: View {
     let session: FlightSession
+    @Environment(\.modelContext) private var modelContext
 
     @AppStorage("unitPreference") private var units: UnitPreference = .system
     @State private var showPressure = true
@@ -22,6 +23,8 @@ struct FlightDetailView: View {
     @State private var exportFormat: SessionExport.Format?
     @State private var exportURLs: [URL] = []
     @State private var exportError: String?
+    @State private var health = HealthKitService()
+    @State private var healthMerged: Int?
 
     var body: some View {
         ScrollView {
@@ -62,6 +65,13 @@ struct FlightDetailView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(exportError ?? "")
+        }
+        .task {
+            // Refreshed on open rather than only at session end: Watch data
+            // syncs on its own schedule, so samples for a flight often arrive
+            // well after landing. The merge is idempotent.
+            healthMerged = await HealthSampleMerge.refresh(
+                session: session, service: health, context: modelContext)
         }
         .navigationTitle(session.displayTitle)
         #if os(iOS)
@@ -104,6 +114,17 @@ struct FlightDetailView: View {
             }
             if !session.apiProvider.isEmpty {
                 LabeledContent("Data source", value: session.apiProvider)
+            }
+            if !session.healthSamples.isEmpty {
+                Divider()
+                ForEach(HealthMetric.allCases, id: \.self) { metric in
+                    let values = session.healthSamples
+                        .filter { $0.healthMetric == metric }
+                        .map(\.value)
+                    if !values.isEmpty {
+                        LabeledContent(metric.label, value: Self.summary(values, unit: metric.unit))
+                    }
+                }
             }
             LabeledContent("Started", value: session.recordingStartedAt.formatted(date: .abbreviated, time: .shortened))
             if let ended = session.recordingEndedAt {
@@ -167,6 +188,17 @@ struct FlightDetailView: View {
             // Export is indistinguishable from the feature being broken.
             exportError = error.localizedDescription
         }
+    }
+
+    /// Range plus sample count, since these series are sparse and irregular —
+    /// a mean alone would hide that a "reading" is a single measurement.
+    static func summary(_ values: [Double], unit: String) -> String {
+        guard let low = values.min(), let high = values.max() else { return "—" }
+        let count = values.count
+        if count == 1 || abs(high - low) < 0.05 {
+            return String(format: "%.0f %@ (%d)", high, unit, count)
+        }
+        return String(format: "%.0f–%.0f %@ (%d)", low, high, unit, count)
     }
 
     // MARK: - Helpers

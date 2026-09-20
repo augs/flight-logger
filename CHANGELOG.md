@@ -102,6 +102,28 @@
   evidence a config derived from someone else's code was ever correct. The
   report builder already handled it; nothing could reach that path
 
+### Unattended capture through the whole flight, opt-in
+- Capturing one response at the start answers "what shape is this API", but not
+  the questions that matter. **United's landing wording only exists after
+  touchdown** (bug B2), fields appear and vanish by flight phase, and units are
+  easiest to infer from a value that changes — 35,000 is feet, 10,668 is metres
+- The app now keeps every response that says something new: unknown fields
+  appearing, the status text changing, the on-ground flag flipping, plus one
+  every five minutes otherwise. Change-driven captures ignore the interval,
+  because a status change at 30 seconds matters more than a tidy cadence
+- Bounded, since it runs unattended: 500 captures per flight. A simulated
+  11-hour flight polled every 30s keeps ~130
+- **Two separate opt-ins, both off by default.** Capturing is local; reporting
+  sends data off the device. Conflating them would mean turning on the useful
+  local thing silently enabled the egress one
+- Captures are browsable on the phone, with **values shown** — locally, values
+  are the useful part, and the point of the feature is not needing a laptop.
+  They also ride along in the JSON export, values intact: that is the user's
+  own copy of their own flight, and redaction applies to public reports
+- The capture reason is stored with each one, which makes a set readable
+  afterwards: the `.statusChanged` immediately before `.groundStateChanged` is
+  where United's arrival wording will be
+
 ### A near-miss worth recording
 - Adding `isDiscovery` to `AirlineConfig` silently broke **every** bundled
   config. Swift's synthesized `Decodable` does not fall back to a property's
@@ -114,7 +136,7 @@
   first was `let x: String? = nil` — which is why both now carry warnings
 
 ### Test and tooling notes
-- Unit tests 78 → 122. New coverage for portal detection, absent telemetry
+- Unit tests 78 → 135. New coverage for portal detection, absent telemetry
   across all three export formats, config ranking, payload inspection,
   redaction, report building, discovery mode and Codable synthesis
 - **B7 recorded**: all 4 macOS UI tests fail to foreground the app under the

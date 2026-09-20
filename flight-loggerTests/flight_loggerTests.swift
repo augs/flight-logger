@@ -1883,3 +1883,183 @@ struct DeferredReportTests {
         #expect(draft.body.contains("portal.example.com"))
     }
 }
+
+// MARK: - Unattended capture
+
+/// The capture policy, exercised against a synthetic flight.
+///
+/// The whole reason this feature exists is that real flights are hard to come
+/// by, so the policy must be testable without one.
+@Suite("Capture policy")
+struct CapturePolicyTests {
+
+    static let t0 = Date(timeIntervalSince1970: 1_757_000_000)
+
+    @Test func firstResponseIsAlwaysKept() {
+        let reason = CapturePolicy.decide(
+            now: Self.t0, status: "In Flight", onGround: false,
+            unmappedPaths: [], state: .init())
+        #expect(reason == .first)
+    }
+
+    /// Nothing changed and no time passed: keeping this would be noise.
+    @Test func anUnchangedResponseIsNotKept() {
+        let state = CapturePolicy.State(
+            lastCaptureAt: Self.t0, lastStatus: "In Flight",
+            lastOnGround: false, lastUnmappedPaths: ["a"], count: 1)
+        let reason = CapturePolicy.decide(
+            now: Self.t0.addingTimeInterval(30), status: "In Flight",
+            onGround: false, unmappedPaths: ["a"], state: state)
+        #expect(reason == nil)
+    }
+
+    /// The case this feature exists for: United's landing wording appears only
+    /// after touchdown, and a capture taken at the gate can never contain it.
+    @Test func aStatusChangeIsKeptImmediately() {
+        let state = CapturePolicy.State(
+            lastCaptureAt: Self.t0, lastStatus: "In Flight - On Time",
+            lastOnGround: false, lastUnmappedPaths: [], count: 1)
+        let reason = CapturePolicy.decide(
+            now: Self.t0.addingTimeInterval(30),
+            status: "Arrived - At Gate", onGround: nil,
+            unmappedPaths: [], state: state)
+        #expect(reason == .statusChanged)
+    }
+
+    @Test func newFieldsAppearingAreKept() {
+        let state = CapturePolicy.State(
+            lastCaptureAt: Self.t0, lastStatus: "x",
+            lastOnGround: false, lastUnmappedPaths: ["a"], count: 1)
+        let reason = CapturePolicy.decide(
+            now: Self.t0.addingTimeInterval(5), status: "x", onGround: false,
+            unmappedPaths: ["a", "b"], state: state)
+        #expect(reason == .newFields)
+    }
+
+    @Test func touchdownIsKept() {
+        let state = CapturePolicy.State(
+            lastCaptureAt: Self.t0, lastStatus: "x",
+            lastOnGround: false, lastUnmappedPaths: [], count: 1)
+        let reason = CapturePolicy.decide(
+            now: Self.t0.addingTimeInterval(5), status: "x", onGround: true,
+            unmappedPaths: [], state: state)
+        #expect(reason == .groundStateChanged)
+    }
+
+    /// A change and an elapsed interval together must record the change, since
+    /// that is the fact worth finding afterwards.
+    @Test func changeWinsOverPeriodic() {
+        let state = CapturePolicy.State(
+            lastCaptureAt: Self.t0, lastStatus: "In Flight",
+            lastOnGround: false, lastUnmappedPaths: [], count: 1)
+        let reason = CapturePolicy.decide(
+            now: Self.t0.addingTimeInterval(CapturePolicy.periodicInterval + 60),
+            status: "Arrived", onGround: false, unmappedPaths: [], state: state)
+        #expect(reason == .statusChanged)
+    }
+
+    @Test func periodicKeepsATrickleWhenNothingChanges() {
+        let state = CapturePolicy.State(
+            lastCaptureAt: Self.t0, lastStatus: "x",
+            lastOnGround: false, lastUnmappedPaths: [], count: 1)
+        let reason = CapturePolicy.decide(
+            now: Self.t0.addingTimeInterval(CapturePolicy.periodicInterval),
+            status: "x", onGround: false, unmappedPaths: [], state: state)
+        #expect(reason == .periodic)
+    }
+
+    /// Unattended for a whole flight, so it must be bounded.
+    @Test func theCapIsEnforced() {
+        let state = CapturePolicy.State(
+            lastCaptureAt: Self.t0, lastStatus: "x", lastOnGround: false,
+            lastUnmappedPaths: [], count: CapturePolicy.maxPerSession)
+        let reason = CapturePolicy.decide(
+            now: Self.t0.addingTimeInterval(9999), status: "changed",
+            onGround: true, unmappedPaths: ["new"], state: state)
+        #expect(reason == nil, "cap did not hold")
+    }
+
+    /// A status that only appears mid-flight must not be lost, and a missing
+    /// one must not erase what was previously known.
+    @Test func absentValuesDoNotCountAsChanges() {
+        let state = CapturePolicy.State(
+            lastCaptureAt: Self.t0, lastStatus: "In Flight",
+            lastOnGround: true, lastUnmappedPaths: [], count: 1)
+        let reason = CapturePolicy.decide(
+            now: Self.t0.addingTimeInterval(5), status: nil, onGround: nil,
+            unmappedPaths: [], state: state)
+        #expect(reason == nil)
+
+        let advanced = CapturePolicy.advance(
+            state, now: Self.t0.addingTimeInterval(5),
+            status: nil, onGround: nil, unmappedPaths: [])
+        #expect(advanced.lastStatus == "In Flight", "a missing status erased a known one")
+        #expect(advanced.lastOnGround == true)
+    }
+
+    /// A realistic flight should produce a useful but modest number.
+    @Test func awholeFlightStaysWithinReason() {
+        var state = CapturePolicy.State()
+        var kept = 0
+        var now = Self.t0
+        // Eleven hours, polled every 30s, status changing four times.
+        let statusChanges: Set<Int> = [10, 400, 1300, 1310]
+        for tick in 0..<1320 {
+            let status = statusChanges.contains(where: { $0 <= tick }) ? "phase\(statusChanges.filter { $0 <= tick }.count)" : "boarding"
+            if let reason = CapturePolicy.decide(
+                now: now, status: status, onGround: tick > 1305,
+                unmappedPaths: ["a"], state: state) {
+                kept += 1
+                state = CapturePolicy.advance(
+                    state, now: now, status: status,
+                    onGround: tick > 1305, unmappedPaths: ["a"])
+                _ = reason
+            }
+            now = now.addingTimeInterval(30)
+        }
+        #expect(kept > 100, "too sparse to be useful: \(kept)")
+        #expect(kept < CapturePolicy.maxPerSession, "hit the cap: \(kept)")
+    }
+}
+
+@Suite("Capture storage and export")
+struct CaptureExportTests {
+
+    @Test func valuePreviewUsesTheSameResolverAsMappings() throws {
+        let json = try #require(try JSONSerialization.jsonObject(
+            with: Data(#"{"legs":[{"alt":35000,"status":"cruise"}]}"#.utf8)) as? [String: Any])
+
+        #expect(PayloadInspector.valuePreview(json, path: "legs.0.status") == "cruise")
+        #expect(PayloadInspector.valuePreview(json, path: "legs.0.alt") == "35000")
+    }
+
+    @Test func exportCarriesCapturesWithValuesIntact() throws {
+        let start = Date(timeIntervalSince1970: 1_757_000_000)
+        let session = FlightSession(flightNumber: "UA 1885", airline: "United",
+                                    recordingStartedAt: start)
+        session.payloadCaptures = [
+            PayloadCapture(timestamp: start, body: #"{"flifo":{"flightStatus":"Arrived"}}"#,
+                           provider: "United", endpoint: "https://unitedwifi.com/x",
+                           reason: .statusChanged, unmappedFieldPaths: "flifo.x\tstring")
+        ]
+
+        let text = SessionExport.json(for: session)
+        let root = try #require(try JSONSerialization.jsonObject(
+            with: Data(text.utf8)) as? [String: Any])
+        let captures = try #require(root["payloadCaptures"] as? [[String: Any]])
+
+        #expect(captures.count == 1)
+        #expect(captures[0]["reason"] as? String == "statusChanged")
+        // The user's own export keeps values; redaction is for public reports.
+        #expect((captures[0]["body"] as? String)?.contains("Arrived") == true)
+    }
+
+    @Test func captureReasonRoundTripsThroughStorage() {
+        let capture = PayloadCapture(body: "{}", provider: "p", endpoint: "e", reason: .groundStateChanged)
+        #expect(capture.captureReason == .groundStateChanged)
+
+        let unknown = PayloadCapture(body: "{}", provider: "p", endpoint: "e", reason: .first)
+        unknown.reason = "somethingFromAFutureVersion"
+        #expect(unknown.captureReason == .periodic, "unknown reason should degrade, not crash")
+    }
+}

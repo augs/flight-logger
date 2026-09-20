@@ -114,6 +114,9 @@ final class FlightSession {
     @Relationship(deleteRule: .cascade, inverse: \DeviceReading.session)
     var deviceReadings: [DeviceReading] = []
 
+    @Relationship(deleteRule: .cascade, inverse: \PayloadCapture.session)
+    var payloadCaptures: [PayloadCapture] = []
+
     @Relationship(deleteRule: .cascade, inverse: \HealthSample.session)
     var healthSamples: [HealthSample] = []
 

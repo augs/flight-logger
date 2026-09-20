@@ -17,6 +17,7 @@ struct FlightDetailView: View {
     @Environment(\.modelContext) private var modelContext
 
     @AppStorage("unitPreference") private var units: UnitPreference = .system
+    @AppStorage(CapturePolicy.reportingEnabledKey) private var reportingEnabled: Bool = false
     @State private var showPressure = true
     @State private var showHumidity = true
     @State private var showAltitude = true
@@ -95,7 +96,35 @@ struct FlightDetailView: View {
     /// so a clean match is the only evidence that a derivation was correct.
     @ViewBuilder
     private var unmappedFieldsCard: some View {
-        if !session.rawFirstResponse.isEmpty {
+        if !session.payloadCaptures.isEmpty {
+            NavigationLink {
+                CaptureListView(session: session)
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "tray.full")
+                        .font(.title2)
+                        .foregroundStyle(.tint)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("^[\(session.payloadCaptures.count) captured response](inflect: true)")
+                            .font(.subheadline.weight(.medium))
+                        Text("Recorded through the flight, with values. Stored on this device.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.leading)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding()
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
+            }
+            .buttonStyle(.plain)
+        }
+
+        // Reporting is its own opt-in: capturing is local, sending is not.
+        if reportingEnabled, !session.rawFirstResponse.isEmpty {
             let unknown = session.unmappedFields.count
             Button {
                 showingFieldReport = true

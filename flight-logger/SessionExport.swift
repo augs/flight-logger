@@ -296,6 +296,31 @@ enum SessionExport {
                     return row
                 }
 
+            // Captures ride along with the export so they can leave the phone
+            // without a laptop present at the time -- AirDrop, mail, Files.
+            // Values are intact here: this is the user's own copy of their own
+            // flight, and redaction applies to public reports, not to this.
+            if !session.payloadCaptures.isEmpty {
+                root["payloadCaptures"] = session.payloadCaptures
+                    .sorted { $0.timestamp < $1.timestamp }
+                    .map { capture -> [String: Any] in
+                        var row: [String: Any] = [
+                            "timestamp": iso.string(from: capture.timestamp),
+                            "reason": capture.reason,
+                            "provider": capture.provider,
+                            "endpoint": capture.endpoint,
+                            "body": capture.body,
+                        ]
+                        let unmapped = capture.unmappedFields
+                        if !unmapped.isEmpty {
+                            row["unmappedFields"] = unmapped.map {
+                                ["path": $0.path, "type": $0.type]
+                            }
+                        }
+                        return row
+                    }
+            }
+
             root["deviceReadings"] = session.deviceReadings
                 .sorted { $0.timestamp < $1.timestamp }
                 .map { d -> [String: Any] in

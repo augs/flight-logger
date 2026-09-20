@@ -97,6 +97,27 @@ enum PayloadInspector {
         return Set(paths.compactMap { $0 }.filter { !$0.isEmpty })
     }
 
+    /// A leaf path with the value found there, for local inspection only.
+    ///
+    /// Values never leave the device through this: a report redacts separately.
+    /// They are kept because a value is often the only way to tell what a field
+    /// means -- an altitude reaching 35,000 is feet, one reaching 10,668 is
+    /// metres, and a status string is the entire point of capturing United.
+    static func valuePreview(_ json: [String: Any], path: String, limit: Int = 120) -> String {
+        guard let value = resolveAny(json, path) else { return "" }
+        switch value {
+        case is NSNull: return "null"
+        case let s as String: return s.count <= limit ? s : String(s.prefix(limit)) + "…"
+        default: return String(describing: value)
+        }
+    }
+
+    /// Resolve using the same rules the parser uses, so previews and mappings
+    /// never disagree about what a path points at.
+    private static func resolveAny(_ json: [String: Any], _ path: String) -> Any? {
+        AirlineResponseParser.resolve(json, path)
+    }
+
     /// Paths present in the response that the config does not read.
     ///
     /// Sorted, so a report is stable and two flights on the same fleet produce

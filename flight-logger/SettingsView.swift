@@ -13,6 +13,8 @@ struct SettingsView: View {
     @AppStorage(AirlineConfigLoader.testURLKey) private var testAPIURL: String = ""
     @AppStorage(HealthKitService.enabledKey) private var healthKitEnabled: Bool = false
     @AppStorage(AirlineConfigLoader.discoveryURLKey) private var discoveryURL: String = ""
+    @AppStorage(CapturePolicy.captureEnabledKey) private var captureEnabled: Bool = false
+    @AppStorage(CapturePolicy.reportingEnabledKey) private var reportingEnabled: Bool = false
     @State private var health = HealthKitService()
 
     var body: some View {
@@ -92,6 +94,21 @@ struct SettingsView: View {
                     Text("Test API URL")
                 } footer: {
                     Text("Probed before the bundled airline configs. Point this at Tools-MockAirlineAPI.py on your network to exercise the polling path without flying. Leave empty in normal use.")
+                }
+
+                Section {
+                    Toggle("Capture airline responses", isOn: $captureEnabled)
+                    Toggle("Offer to report captures", isOn: $reportingEnabled)
+                } header: {
+                    Text("Airline API capture")
+                } footer: {
+                    Text("""
+                    Capturing keeps each airline response that says something new — when unknown fields appear, when the status text changes, and when the aircraft touches down — plus one every five minutes otherwise. It runs unattended for the whole flight and stays on your device.
+
+                    These APIs are only reachable in the air, and no config in this app has ever been checked against a real response, so a captured flight is the only way to confirm or fix them. United in particular has no on-ground field: its landing wording exists only after touchdown.
+
+                    Reporting is separate and sends nothing by itself — it adds a button that opens a pre-filled GitHub issue with values redacted, which you submit yourself.
+                    """)
                 }
 
                 Section {

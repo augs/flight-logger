@@ -43,6 +43,9 @@ final class AirlineAPIService {
     /// Polls the indicator must hold before a session is ended. At the 30s poll
     /// interval this is ~90 seconds.
     private static let onGroundConfirmations = 3
+
+    /// Capture bookkeeping for the current flight. Reset with the session.
+    private var captureState = CapturePolicy.State()
     private var flightSession: FlightSession?
     private var modelContext: ModelContext?
 
@@ -65,6 +68,9 @@ final class AirlineAPIService {
     func startPolling(flightSession: FlightSession, modelContext: ModelContext) {
         stopPolling()
         hasPopulatedMetadata = false
+        // Per-flight, or a second recording would inherit the first's history
+        // and skip its own opening capture.
+        captureState = CapturePolicy.State()
         consecutiveOnGround = 0
         self.flightSession = flightSession
         self.modelContext = modelContext
@@ -172,6 +178,54 @@ final class AirlineAPIService {
         }
     }
 
+    // MARK: - Payload capture
+
+    /// Keeps a full response when it says something the last one did not.
+    ///
+    /// Off unless the user turned it on. The policy lives in `CapturePolicy`
+    /// so it can be exercised against a synthetic flight; this method only
+    /// does the storage.
+    private func captureIfWorthwhile(
+        data: Data,
+        json: [String: Any],
+        reading: AirlineResponseParser.Reading,
+        config: AirlineConfig,
+        flightSession: FlightSession,
+        modelContext: ModelContext
+    ) {
+        guard UserDefaults.standard.bool(forKey: CapturePolicy.captureEnabledKey) else { return }
+
+        let unmapped = PayloadInspector.unmapped(json: json, fields: config.fields)
+        let paths = Set(unmapped.map(\.path))
+        let now = Date()
+
+        guard let reason = CapturePolicy.decide(
+            now: now,
+            status: reading.flightStatus,
+            onGround: reading.onGround,
+            unmappedPaths: paths,
+            state: captureState
+        ) else { return }
+
+        let capture = PayloadCapture(
+            timestamp: now,
+            body: String(data: data, encoding: .utf8) ?? "",
+            provider: config.airline,
+            endpoint: config.url,
+            reason: reason,
+            unmappedFieldPaths: unmapped.map { "\($0.path)\t\($0.type)" }.joined(separator: "\n"),
+            session: flightSession
+        )
+        modelContext.insert(capture)
+
+        captureState = CapturePolicy.advance(
+            captureState, now: now, status: reading.flightStatus,
+            onGround: reading.onGround, unmappedPaths: paths
+        )
+
+        logger.info("Captured payload (\(reason.rawValue, privacy: .public)), \(self.captureState.count) this flight")
+    }
+
     // MARK: - Probing
 
     /// Quick check to see if an airline API is really answering.
@@ -257,6 +311,11 @@ final class AirlineAPIService {
             lastPollTime = Date()
 
             timeRemainingMinutes = reading.timeRemainingMinutes
+
+            captureIfWorthwhile(
+                data: data, json: json, reading: reading, config: config,
+                flightSession: flightSession, modelContext: modelContext
+            )
 
             // Auto-populate session metadata on first successful poll
             if !hasPopulatedMetadata {

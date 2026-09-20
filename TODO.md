@@ -18,7 +18,7 @@ require reading the whole file.
 | # | Bug | Impact |
 |---|---|---|
 | ~~B1~~ | ~~Detection accepts any HTTP 200~~ — **fixed 2026-09-20**. `probe` now requires the body to parse as JSON *and* yield at least one mapped field (`AirlineAPIService.isUsableResponse`) | Was: latched onto a portal before the flight started and recorded nothing |
-| B2 | United/Gogo landing strings (`"arrived"`, `"landed"`, `"at gate"`) are guessed, not observed | Auto-stop may never fire for United. Falls through to the 2h inactivity backstop |
+| B2 | United/Gogo landing strings (`"arrived"`, `"landed"`, `"at gate"`) are guessed, not observed | Auto-stop may never fire for United. Falls through to the 2h inactivity backstop. **Now answerable without a laptop:** enable capture in Settings before a United flight — the capture taken at the status change before touchdown contains the real wording |
 | B3 | `ugo.json` and `boardconnect-map.json` are position-only — no landing signal at all | Those sessions can only end via the 2h backstop |
 | B4 | `panasonic.json` maps no aircraft model | Panasonic exposes `tail_number` (now stored as registration) but no model name |
 | B5 | Two `Linking to …` log lines per connect | Cosmetic. `peripheral.state` has not transitioned when the second call arrives in the same run-loop turn |

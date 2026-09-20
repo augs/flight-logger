@@ -46,9 +46,23 @@
   than missing data, which is why it survived unnoticed: every export looked
   complete
 
+### Detection order was arbitrary where two endpoints share a host
+- Lufthansa exposes both `/fapi/flightData` (9 mapped fields, including
+  `weightOnWheels`, `aircraftType` and flight number) and `/map/api/flightData`
+  (position only, 2 fields) on `lufthansa-flynet.com`. Config order came from
+  `Bundle.main.urls`, which is filesystem order, so which one won detection was
+  arbitrary — and losing that coin flip costs the on-ground flag, the aircraft
+  type and the flight number for an entire flight
+- Configs are now ranked by how much they actually map, ties broken by name so
+  the order is stable rather than merely deterministic. Unit declarations do
+  not count toward richness, since they describe how to read a field rather
+  than adding one
+- Found while assessing how well an upcoming Lufthansa A340 flight would fare,
+  which is a good argument for asking that question of a route before flying it
+
 ### Test and tooling notes
-- Unit tests 78 → 88. New coverage for portal detection and for absent
-  telemetry surviving all three export formats
+- Unit tests 78 → 94. New coverage for portal detection, absent telemetry
+  surviving all three export formats, and config ranking
 - **B7 recorded**: all 4 macOS UI tests fail to foreground the app under the
   harness (`current state: Running Background`), deterministically — 3 runs out
   of 3, two via the Xcode MCP and one via plain `xcodebuild`. Each burns its

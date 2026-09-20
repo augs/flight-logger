@@ -76,6 +76,29 @@ struct AirlineConfig: Codable, Identifiable {
         /// lets a config express that without special-casing an airline in
         /// code. Matched case-insensitively as a substring.
         var onGroundStatusValues: [String]? = nil
+
+        /// How many data fields this config actually maps, used to prefer a
+        /// richer endpoint over a thinner one during detection.
+        ///
+        /// Counts paths to data only. Unit declarations describe how to read a
+        /// field rather than adding one, and counting them would let a config
+        /// outrank a genuinely richer rival by declaring units it needs anyway.
+        var mappedCount: Int {
+            let paths = [
+                flightNumber, origin, destination, altitudeFt, groundSpeedMPH,
+                airTempF, onGround, aircraftModel, flightStatus,
+                scheduledDepartureTimeLocal, scheduledArrivalTimeLocal,
+                timeRemainingMinutes, originCity, destinationCity,
+                originICAO, destinationICAO, departureGate, departureTerminal,
+                arrivalGate, arrivalTerminal, tailNumber, equipmentCode,
+                scheduledDurationMinutes,
+            ]
+            let mapped = paths.compactMap { $0 }.filter { !$0.isEmpty }.count
+            // A text-based landing signal is a real capability, and the only
+            // one United has -- worth a point so it can outrank a config that
+            // detects landing not at all.
+            return mapped + ((onGroundStatusValues?.isEmpty == false) ? 1 : 0)
+        }
     }
 }
 
@@ -135,9 +158,37 @@ enum AirlineConfigLoader {
             guard let data = try? Data(contentsOf: url) else { return nil }
             return try? JSONDecoder().decode(AirlineConfig.self, from: data)
         }
+        // Richest config first, then test config ahead of everything.
+        //
+        // Bundle URL order is filesystem order -- arbitrary, and it mattered:
+        // Lufthansa exposes both `/fapi/flightData` (flight number, aircraft
+        // type, weightOnWheels, ~10 fields) and `/map/api/flightData`
+        // (position only, 2 fields) on the same host. Whichever the filesystem
+        // happened to return first won detection, so a flight could silently
+        // land on the position-only config and lose the on-ground flag, the
+        // aircraft type and the flight number for the whole flight.
+        //
+        // Sorting by how much a config actually maps makes that deterministic
+        // without a hand-maintained priority list, and generalises to the next
+        // provider that ships two endpoints.
+        //
         // Test config first: when set, it is deliberately what you want probed,
         // and probing a real airline URL from the ground just wastes a timeout.
-        return [testConfig()].compactMap { $0 } + bundled
+        return [testConfig()].compactMap { $0 } + ranked(bundled)
+    }
+
+    /// Detection order for a set of configs: richest first, ties broken by
+    /// name so the order is stable rather than merely deterministic.
+    ///
+    /// Separate from `loadAll` because the test host's bundle carries no
+    /// configs -- the tests read them from disk -- and the ordering is the part
+    /// worth testing.
+    static func ranked(_ configs: [AirlineConfig]) -> [AirlineConfig] {
+        configs.sorted {
+            $0.fields.mappedCount == $1.fields.mappedCount
+                ? $0.airline < $1.airline
+                : $0.fields.mappedCount > $1.fields.mappedCount
+        }
     }
 
     static func loadConfig(named airline: String) -> AirlineConfig? {

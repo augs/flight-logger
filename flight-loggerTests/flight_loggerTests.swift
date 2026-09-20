@@ -1456,3 +1456,93 @@ struct AbsentTelemetryTests {
         #expect(!out.contains("flight,"), "emitted a point with no fields")
     }
 }
+
+// MARK: - Detection order
+
+/// Two providers ship more than one endpoint on the same host, and bundle URL
+/// order is filesystem order. Without an explicit ranking, which config wins
+/// detection is arbitrary -- and picking the thin one costs the whole flight.
+@Suite("Detection order")
+struct DetectionOrderTests {
+
+    /// The case that motivated this: both Lufthansa configs answer on
+    /// `lufthansa-flynet.com`, but only `/fapi/flightData` carries the
+    /// on-ground flag, aircraft type and flight number.
+    @Test func richLufthansaConfigOutranksThePositionOnlyOne() throws {
+        let fapi = AirlineConfig.FieldMappings(
+            flightNumber: "flightNumber", origin: "orig.code",
+            destination: "dest.code", altitudeFt: "altitude",
+            groundSpeedMPH: "groundSpeed", onGround: "weightOnWheels",
+            aircraftModel: "aircraftType", flightStatus: "flightPhase",
+            tailNumber: "aircraftRegistration"
+        )
+        let map = AirlineConfig.FieldMappings(
+            altitudeFt: "altitude", groundSpeedMPH: "groundSpeed"
+        )
+
+        #expect(fapi.mappedCount > map.mappedCount)
+        #expect(map.mappedCount == 2)
+    }
+
+    /// Unit declarations describe how to read a field, not an extra field.
+    /// Counting them would let a thin config outrank a rich one for free.
+    @Test func unitDeclarationsDoNotInflateTheCount() {
+        let plain = AirlineConfig.FieldMappings(altitudeFt: "a", groundSpeedMPH: "b")
+        let withUnits = AirlineConfig.FieldMappings(
+            altitudeFt: "a", groundSpeedMPH: "b",
+            altitudeUnit: "meters", speedUnit: "knots", temperatureUnit: "celsius"
+        )
+        #expect(plain.mappedCount == withUnits.mappedCount)
+    }
+
+    /// United detects landing only through status text, which is a real
+    /// capability and should outrank a config that cannot detect it at all.
+    @Test func textLandingSignalCounts() {
+        let silent = AirlineConfig.FieldMappings(altitudeFt: "a")
+        let speaks = AirlineConfig.FieldMappings(
+            altitudeFt: "a", onGroundStatusValues: ["landed"]
+        )
+        #expect(speaks.mappedCount > silent.mappedCount)
+    }
+
+    /// An empty path is not a mapping. Configs are hand-written JSON and an
+    /// empty string is an easy way to think you have mapped something.
+    @Test func emptyPathsDoNotCount() {
+        #expect(AirlineConfig.FieldMappings(altitudeFt: "").mappedCount == 0)
+    }
+
+    /// The real bundled set must order the way the fix intends.
+    ///
+    /// Read from disk rather than `Bundle.main`, which carries no configs in
+    /// the test host -- the same approach the other config tests take.
+    @Test func bundledConfigsAreRankedRichestFirst() throws {
+        let directory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appending(path: "flight-logger/AirlineConfigs")
+
+        let configs = try FileManager.default
+            .contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
+            .map { try JSONDecoder().decode(AirlineConfig.self, from: Data(contentsOf: $0)) }
+        try #require(configs.count > 1)
+
+        let all = AirlineConfigLoader.ranked(configs)
+        let counts = all.map(\.fields.mappedCount)
+        #expect(counts == counts.sorted(by: >), "configs are not ranked: \(counts)")
+
+        let names = all.map(\.airline)
+        let fapi = try #require(names.firstIndex { $0.contains("FlyNet") })
+        let map = try #require(names.firstIndex { $0.contains("BoardConnect") })
+        #expect(fapi < map, "position-only BoardConnect would win detection")
+    }
+
+    /// Equal-ranked configs must not reorder between runs, or which provider
+    /// is probed first becomes a coin flip again.
+    @Test func tiesAreBrokenStably() {
+        let a = AirlineConfig(airline: "Zebra", url: "https://z", fields: .init(altitudeFt: "a"))
+        let b = AirlineConfig(airline: "Alpha", url: "https://a", fields: .init(altitudeFt: "a"))
+        #expect(AirlineConfigLoader.ranked([a, b]).map(\.airline) == ["Alpha", "Zebra"])
+        #expect(AirlineConfigLoader.ranked([b, a]).map(\.airline) == ["Alpha", "Zebra"])
+    }
+}

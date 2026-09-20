@@ -96,6 +96,11 @@
   misattribute an old capture
 - Flights with a pending report are marked in the list, not just on their own
   screen, so one made weeks ago is still findable
+- **Any capture is reportable, not just one with unknown fields.** The entry
+  point was gated on finding something unrecognised, which locked out the most
+  valuable case: a response that matches the config exactly is the only
+  evidence a config derived from someone else's code was ever correct. The
+  report builder already handled it; nothing could reach that path
 
 ### A near-miss worth recording
 - Adding `isDiscovery` to `AirlineConfig` silently broke **every** bundled
@@ -109,7 +114,7 @@
   first was `let x: String? = nil` — which is why both now carry warnings
 
 ### Test and tooling notes
-- Unit tests 78 → 121. New coverage for portal detection, absent telemetry
+- Unit tests 78 → 122. New coverage for portal detection, absent telemetry
   across all three export formats, config ranking, payload inspection,
   redaction, report building, discovery mode and Codable synthesis
 - **B7 recorded**: all 4 macOS UI tests fail to foreground the app under the

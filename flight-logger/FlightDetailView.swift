@@ -83,25 +83,35 @@ struct FlightDetailView: View {
 
     // MARK: - Metadata
 
-    /// Offers to report fields the app did not recognise.
+    /// Offers to report the airline response.
     ///
     /// Shown rather than popped as a dialog: this is never urgent, and a modal
     /// interrupting someone mid-flight to ask about JSON would be the wrong
     /// trade. It waits on the flight detail screen until they are interested.
+    ///
+    /// Offered for *any* captured payload, not only one with unknown fields. A
+    /// response where everything mapped is still worth having: every config in
+    /// this app is derived from third-party code rather than a real capture,
+    /// so a clean match is the only evidence that a derivation was correct.
     @ViewBuilder
     private var unmappedFieldsCard: some View {
-        if !session.unmappedFields.isEmpty {
+        if !session.rawFirstResponse.isEmpty {
+            let unknown = session.unmappedFields.count
             Button {
                 showingFieldReport = true
             } label: {
                 HStack(spacing: 12) {
-                    Image(systemName: "questionmark.square.dashed")
+                    Image(systemName: unknown > 0 ? "questionmark.square.dashed" : "checkmark.square.dashed")
                         .font(.title2)
                         .foregroundStyle(.tint)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("^[\(session.unmappedFields.count) unrecognised field](inflect: true)")
+                        Text(unknown > 0
+                             ? "^[\(unknown) unrecognised field](inflect: true)"
+                             : "Share this capture")
                             .font(.subheadline.weight(.medium))
-                        Text("This response had fields the app does not map. Reporting them helps every future flight on this fleet.")
+                        Text(unknown > 0
+                             ? "This response had fields the app does not map. Reporting them helps every future flight on this fleet."
+                             : "Everything here was recognised. Sending it confirms the field map is right — no config in this app has ever been checked against a real response.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.leading)

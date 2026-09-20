@@ -118,7 +118,9 @@ struct FlightSessionRow: View {
                 // rather than only on the flight's own screen.
                 if session.hasPendingFieldReport {
                     Text("·")
-                    Image(systemName: "questionmark.square.dashed")
+                    Image(systemName: session.hasUnrecognisedFields
+                          ? "questionmark.square.dashed"
+                          : "checkmark.square.dashed")
                         .font(.caption2)
                         .foregroundStyle(.tint)
                 }

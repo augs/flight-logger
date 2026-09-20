@@ -86,9 +86,13 @@ final class FlightSession {
     /// Reported from the ground, days later if need be: everything a report
     /// needs is on disk, so no network is required during the flight and none
     /// of it depends on the app still being configured the same way.
-    var hasPendingFieldReport: Bool {
-        !unmappedFieldPaths.isEmpty && !rawFirstResponse.isEmpty
-    }
+    /// True for any captured payload, whether or not it held surprises. A
+    /// response that matched the config exactly is the only evidence that a
+    /// config derived from someone else's code was actually correct.
+    var hasPendingFieldReport: Bool { !rawFirstResponse.isEmpty }
+
+    /// Whether the capture contained anything the app could not read.
+    var hasUnrecognisedFields: Bool { !unmappedFieldPaths.isEmpty }
 
     /// Unmapped fields, parsed back into structured form.
     var unmappedFields: [PayloadInspector.Leaf] {

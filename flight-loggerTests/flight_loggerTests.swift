@@ -1849,16 +1849,37 @@ struct DeferredReportTests {
         #expect(draft.body.contains("cruise"))
     }
 
-    @Test func pendingFlagNeedsBothPayloadAndFields() {
+    @Test func aPayloadIsReportableEvenWithNoSurprises() {
         let full = Self.captured()
         #expect(full.hasPendingFieldReport)
+        #expect(full.hasUnrecognisedFields)
 
-        let noPayload = Self.captured()
-        noPayload.rawFirstResponse = ""
-        #expect(!noPayload.hasPendingFieldReport)
+        // The valuable case: everything mapped. Still reportable, because a
+        // clean match is the only evidence a derived config was correct.
+        let clean = Self.captured()
+        clean.unmappedFieldPaths = ""
+        #expect(clean.hasPendingFieldReport)
+        #expect(!clean.hasUnrecognisedFields)
 
-        let nothingUnknown = Self.captured()
-        nothingUnknown.unmappedFieldPaths = ""
-        #expect(!nothingUnknown.hasPendingFieldReport)
+        // Nothing captured at all -- e.g. the portal was never reachable.
+        let empty = Self.captured()
+        empty.rawFirstResponse = ""
+        #expect(!empty.hasPendingFieldReport)
+    }
+
+    /// A fully-mapped capture must still produce a sensible report.
+    @Test func cleanCaptureStillBuildsAReport() throws {
+        let session = Self.captured()
+        session.unmappedFieldPaths = ""
+        let payload = try #require(
+            try JSONSerialization.jsonObject(
+                with: Data(session.rawFirstResponse.utf8)) as? [String: Any])
+
+        let draft = FieldReport.draft(
+            provider: session.apiProvider, endpoint: session.apiEndpointURL,
+            unmapped: [], payload: payload, appVersion: "1.0 (1)")
+
+        #expect(draft.title.contains("Payload capture"))
+        #expect(draft.body.contains("portal.example.com"))
     }
 }

@@ -262,6 +262,7 @@ final class AirlineAPIService {
             if !hasPopulatedMetadata {
                 populateMetadata(reading, session: flightSession)
                 flightSession.apiProvider = config.airline
+                flightSession.apiEndpointURL = config.url
                 // Keep the payload verbatim. Anything not mapped above is
                 // otherwise lost the moment the flight lands, and this turns a
                 // real flight into a fixture for the parser tests.

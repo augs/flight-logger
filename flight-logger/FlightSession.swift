@@ -63,6 +63,15 @@ final class FlightSession {
     /// Stays on device like everything else; exported only if the user asks.
     var rawFirstResponse: String = ""
 
+    /// The URL the response actually came from.
+    ///
+    /// Persisted rather than looked up from the config later, and that matters
+    /// most for a user-supplied unknown endpoint: its URL lives in Settings,
+    /// so clearing or changing that field after landing would erase the single
+    /// most valuable fact in a report. A bundled config's URL can also change
+    /// in an app update, which would misattribute an old capture.
+    var apiEndpointURL: String = ""
+
     /// Paths in the first response that no config read, one per line as
     /// `path\ttype`.
     ///
@@ -71,6 +80,15 @@ final class FlightSession {
     /// config can change underneath it -- this records what was unknown *at
     /// the time of the flight*.
     var unmappedFieldPaths: String = ""
+
+    /// Whether this flight captured something worth reporting.
+    ///
+    /// Reported from the ground, days later if need be: everything a report
+    /// needs is on disk, so no network is required during the flight and none
+    /// of it depends on the app still being configured the same way.
+    var hasPendingFieldReport: Bool {
+        !unmappedFieldPaths.isEmpty && !rawFirstResponse.isEmpty
+    }
 
     /// Unmapped fields, parsed back into structured form.
     var unmappedFields: [PayloadInspector.Leaf] {

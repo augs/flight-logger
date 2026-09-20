@@ -83,6 +83,20 @@
   typed, never to automatic detection — and a bundled config cannot grant
   itself the flag
 
+### Reports are filed from the ground, so they persist
+- The capture happens in the air and is filed days later, usually by someone
+  who never paid for wifi. The payload, the unrecognised field list and the
+  endpoint are all stored with the session, so building a report needs no
+  network and no live configuration
+- **The endpoint is now persisted rather than looked up.** It was being
+  resolved from the current config by provider name, which breaks in the case
+  that matters most: an unknown endpoint's URL lives in Settings, so clearing
+  that field after landing would erase the single most valuable fact in the
+  report. A bundled config's URL can also change in an app update and
+  misattribute an old capture
+- Flights with a pending report are marked in the list, not just on their own
+  screen, so one made weeks ago is still findable
+
 ### A near-miss worth recording
 - Adding `isDiscovery` to `AirlineConfig` silently broke **every** bundled
   config. Swift's synthesized `Decodable` does not fall back to a property's
@@ -95,7 +109,7 @@
   first was `let x: String? = nil` — which is why both now carry warnings
 
 ### Test and tooling notes
-- Unit tests 78 → 116. New coverage for portal detection, absent telemetry
+- Unit tests 78 → 121. New coverage for portal detection, absent telemetry
   across all three export formats, config ranking, payload inspection,
   redaction, report building, discovery mode and Codable synthesis
 - **B7 recorded**: all 4 macOS UI tests fail to foreground the app under the

@@ -113,6 +113,15 @@ struct FlightSessionRow: View {
                     Text("·")
                     Image(systemName: "airplane").font(.caption2)
                 }
+                // A capture is usually made in the air and filed days later
+                // from the ground, so it has to stay findable in the list
+                // rather than only on the flight's own screen.
+                if session.hasPendingFieldReport {
+                    Text("·")
+                    Image(systemName: "questionmark.square.dashed")
+                        .font(.caption2)
+                        .foregroundStyle(.tint)
+                }
             }
             .font(.caption)
             .foregroundStyle(.secondary)

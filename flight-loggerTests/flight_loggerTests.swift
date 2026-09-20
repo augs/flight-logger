@@ -1796,3 +1796,69 @@ struct ConfigCodableSynthesisTests {
         #expect(config.isDiscovery == false, "JSON granted itself discovery mode")
     }
 }
+
+/// A capture is made in the air and filed from the ground, often days later
+/// and usually without having paid for wifi. Everything a report needs must
+/// therefore survive on disk, independent of the app's current configuration.
+@Suite("Report survives the flight")
+struct DeferredReportTests {
+
+    static func captured() -> FlightSession {
+        let s = FlightSession(flightNumber: "LH 441", airline: "Lufthansa",
+                              recordingStartedAt: Date(timeIntervalSince1970: 1_757_000_000))
+        s.apiProvider = "Unknown API"
+        s.apiEndpointURL = "https://portal.example.com/api/flightdata"
+        s.rawFirstResponse = #"{"phase":"cruise","windDirection":270}"#
+        s.unmappedFieldPaths = "phase\tstring\nwindDirection\tnumber"
+        return s
+    }
+
+    @Test func unmappedFieldsRoundTripThroughStorage() {
+        let fields = Self.captured().unmappedFields
+        #expect(fields.map(\.path) == ["phase", "windDirection"])
+        #expect(fields.map(\.type) == ["string", "number"])
+    }
+
+    /// The endpoint is the most valuable fact about an unknown API, and it
+    /// lives in Settings -- which the user may well clear after landing.
+    @Test func endpointSurvivesTheSettingFieldBeingCleared() {
+        let session = Self.captured()
+        UserDefaults.standard.removeObject(forKey: AirlineConfigLoader.discoveryURLKey)
+
+        #expect(AirlineConfigLoader.discoveryConfig() == nil)
+        #expect(session.apiEndpointURL == "https://portal.example.com/api/flightdata")
+    }
+
+    /// A full report must be buildable with no network and no live config.
+    @Test func reportBuildsEntirelyFromStoredState() throws {
+        let session = Self.captured()
+        let payload = try #require(
+            try JSONSerialization.jsonObject(
+                with: Data(session.rawFirstResponse.utf8)) as? [String: Any])
+
+        let draft = FieldReport.draft(
+            provider: session.apiProvider,
+            endpoint: session.apiEndpointURL,
+            unmapped: session.unmappedFields,
+            payload: payload,
+            appVersion: "1.0 (1)"
+        )
+
+        #expect(draft.body.contains("portal.example.com"))
+        #expect(draft.body.contains("windDirection"))
+        #expect(draft.body.contains("cruise"))
+    }
+
+    @Test func pendingFlagNeedsBothPayloadAndFields() {
+        let full = Self.captured()
+        #expect(full.hasPendingFieldReport)
+
+        let noPayload = Self.captured()
+        noPayload.rawFirstResponse = ""
+        #expect(!noPayload.hasPendingFieldReport)
+
+        let nothingUnknown = Self.captured()
+        nothingUnknown.unmappedFieldPaths = ""
+        #expect(!nothingUnknown.hasPendingFieldReport)
+    }
+}

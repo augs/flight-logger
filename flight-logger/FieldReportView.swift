@@ -33,7 +33,9 @@ struct FieldReportView: View {
     private var draft: FieldReport.Draft {
         FieldReport.draft(
             provider: session.apiProvider.isEmpty ? "Unknown" : session.apiProvider,
-            endpoint: AirlineConfigLoader.loadConfig(named: session.apiProvider)?.url ?? "(unrecorded)",
+            // From the session, not from the current config: the endpoint
+            // that produced this payload may no longer be configured.
+            endpoint: session.apiEndpointURL.isEmpty ? "(unrecorded)" : session.apiEndpointURL,
             unmapped: unmapped,
             payload: payload
         )
@@ -62,7 +64,7 @@ struct FieldReportView: View {
                 } header: {
                     Text(unmapped.isEmpty ? "Fields" : "^[\(unmapped.count) unrecognised field](inflect: true)")
                 } footer: {
-                    Text("Every airline config in this app is derived from other people's code, not from a real response. Reporting these is how they get mapped.")
+                    Text("Every airline config in this app is derived from other people's code, not from a real response. Reporting these is how they get mapped. The capture is stored on your device, so there is no rush — file it after you land.")
                 }
 
                 Section {

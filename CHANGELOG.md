@@ -1,5 +1,60 @@
 # Changelog
 
+## 2026-09-20 — Opt-in HealthKit, and two bugs in the airline data path
+
+### HealthKit (#25) — opt-in, phone-side
+- Reads SpO2, heart rate, HRV (SDNN) and respiratory rate over the flight
+  window and stores them against the session, so cabin conditions and
+  physiological response share one timeline
+- Gated behind a Settings toggle that defaults to off; flipping it on is what
+  triggers the system prompt. Read-only authorization for exactly four types
+- SpO2 is rescaled from HealthKit's 0–1 fraction to percent, and the merge is
+  keyed on HealthKit's sample UUID so a window queried twice — which happens
+  routinely, since Watch data syncs late — does not duplicate rows
+- **Still blocked on a one-time Xcode step**: the HealthKit capability must be
+  added to the target to regenerate the provisioning profile. The entitlements
+  file exists but is deliberately not wired into the pbxproj, since wiring it
+  without the profile fails the build outright
+- Worth stating plainly: SpO2 cannot be polled. The Watch samples on its own
+  schedule, largely when the wearer is still, so a flight may yield a handful
+  of readings or none
+
+### Airline detection no longer believes any HTTP 200 (B1)
+- `probe` accepted any 2xx without reading the body, so a captive portal login
+  page — or United's own portal answering `isPortalInitialized: false` before
+  the flight began — would latch detection onto a provider that then reported
+  nothing for the entire flight
+- Detection now requires the body to parse as JSON *and* yield at least one
+  mapped field. Split out as `AirlineAPIService.isUsableResponse` so it is
+  testable against recorded bodies, including the ones that caused the bug
+- Partial data still counts: a portal reporting only a flight number is the
+  right provider, and demanding every field would reject it
+
+### Absent telemetry stopped being recorded as zero (B8)
+- Found while fixing B1. `FlightDataPoint` stored non-optional `Double`s and
+  `poll` coerced missing fields with `?? 0`, so **United — which reports no
+  outside air temperature — recorded 0 °F on every flight**, a plausible-
+  looking cruise value, and a missing altitude recorded 0 ft, indistinguishable
+  from being on the ground
+- The parser already distinguished absent from zero, and `poll` threw that away
+  one line later. The fields are now optional end to end: CSV leaves the column
+  empty, line protocol omits the field (it has no null, so 0 would read as a
+  real measurement), JSON omits the key, charts skip the point rather than
+  spiking to sea level, and readouts show "--"
+- A poll where nothing parsed no longer inserts a row at all
+- This is the one bug in this codebase so far that wrote *wrong* data rather
+  than missing data, which is why it survived unnoticed: every export looked
+  complete
+
+### Test and tooling notes
+- Unit tests 78 → 88. New coverage for portal detection and for absent
+  telemetry surviving all three export formats
+- **B7 recorded**: all 4 macOS UI tests fail to foreground the app under the
+  harness (`current state: Running Background`), deterministically — 3 runs out
+  of 3, two via the Xcode MCP and one via plain `xcodebuild`. Each burns its
+  60–120s activation timeout, so a full run wastes ~7 minutes. Unit tests are
+  unaffected; suspicion is the macOS destination rather than the test code
+
 ## 2026-09-08 — Airline API coverage, metadata capture, phone sensors
 
 ### Airline APIs became testable, then better covered

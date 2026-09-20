@@ -111,15 +111,20 @@ struct FlightProfileCharts: View {
                 )
                 .frame(height: panelHeight)
             } else {
-                if showAltitude && !(flightDataPoints.isEmpty && gpsAltitude.isEmpty) {
+                if showAltitude && !(!flightDataPoints.contains(where: { $0.altitudeFt != nil }) && gpsAltitude.isEmpty) {
                     panel(title: units.altitudeLabel, color: .blue) {
                         ForEach(flightDataPoints) { point in
-                            LineMark(
-                                x: .value("Time", point.timestamp),
-                                y: .value("Altitude", units.altitudeValue(point.altitudeFt)),
-                                series: .value("Source", "Airline")
-                            )
-                            .foregroundStyle(.blue)
+                            // A point with no altitude is a poll that reported
+                            // something else; drawing it at 0 would put a spike
+                            // to sea level in the middle of cruise.
+                            if let ft = point.altitudeFt {
+                                LineMark(
+                                    x: .value("Time", point.timestamp),
+                                    y: .value("Altitude", units.altitudeValue(ft)),
+                                    series: .value("Source", "Airline")
+                                )
+                                .foregroundStyle(.blue)
+                            }
                         }
                         // GNSS altitude is not pressure altitude and will not
                         // match the airline's figure; both are kept rather than
@@ -289,7 +294,10 @@ struct FlightProfileCharts: View {
     /// Nearest sample to the scrubbed time, formatted for the given panel.
     private func valueText(at time: Date, for title: String) -> String? {
         if title == units.altitudeLabel {
-            guard let point = nearest(flightDataPoints, to: time, key: \.timestamp) else { return nil }
+            // Scrub to the nearest point that actually has an altitude,
+            // otherwise the readout blanks over gaps in a continuous line.
+            let withAltitude = flightDataPoints.filter { $0.altitudeFt != nil }
+            guard let point = nearest(withAltitude, to: time, key: \.timestamp) else { return nil }
             return units.formatAltitude(point.altitudeFt)
         }
         guard let reading = nearest(sensorReadings, to: time, key: \.timestamp) else { return nil }

@@ -174,18 +174,35 @@ final class AirlineAPIService {
 
     // MARK: - Probing
 
-    /// Quick check to see if an airline API is reachable.
+    /// Quick check to see if an airline API is really answering.
+    ///
+    /// Reachability is not enough. A captive portal will happily return 200 for
+    /// anything -- a login page, or United's own portal answering
+    /// `isPortalInitialized: false` before the flight has started -- and
+    /// accepting that latched detection onto a provider that then reported
+    /// nothing for the whole flight. The body has to parse *and* yield at least
+    /// one mapped field before a config is believed.
     private func probe(config: AirlineConfig) async -> Bool {
         guard let url = URL(string: config.url) else { return false }
         do {
-            let (_, response) = try await session.data(from: url)
-            if let http = response as? HTTPURLResponse {
-                return (200...299).contains(http.statusCode)
-            }
-            return false
+            let (data, response) = try await session.data(from: url)
+            guard let http = response as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode) else { return false }
+            return Self.isUsableResponse(data, fields: config.fields)
         } catch {
             return false
         }
+    }
+
+    /// Whether a probe body is real flight data rather than a portal page.
+    ///
+    /// Separated from the network call so it can be tested against recorded
+    /// bodies -- including the ones that caused this bug -- without a flight.
+    static func isUsableResponse(_ data: Data, fields: AirlineConfig.FieldMappings) -> Bool {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return false   // an HTML login page is not an airline API
+        }
+        return !AirlineResponseParser.parse(json: json, fields: fields).isEmpty
     }
 
     // MARK: - Polling
@@ -201,19 +218,30 @@ final class AirlineAPIService {
             // against recorded responses without a network or a flight.
             let reading = AirlineResponseParser.parse(json: json, fields: config.fields)
 
-            let altitude = reading.altitudeFt ?? 0
-            let speed = reading.groundSpeedMPH ?? 0
-            let airTemp = reading.airTempF ?? 0
-            let flightStatus = reading.flightStatus ?? ""
+            // Pass the optionals through rather than collapsing them to 0.
+            // The parser distinguishes "the provider did not report this" from
+            // "the provider reported zero", and that distinction is the whole
+            // point -- see FlightDataPoint.
+            //
+            // A row where nothing at all parsed is noise, not data: it would
+            // show up in an export as a timestamp with empty columns and
+            // inflate the sample count. Metadata capture and the on-ground
+            // check below still run, since those read from `reading` directly.
+            let hasTelemetry = reading.altitudeFt != nil
+                || reading.groundSpeedMPH != nil
+                || reading.airTempF != nil
+                || !(reading.flightStatus ?? "").isEmpty
 
-            let dataPoint = FlightDataPoint(
-                altitudeFt: altitude,
-                groundSpeedMPH: speed,
-                outsideAirTempF: airTemp,
-                flightStatus: flightStatus,
-                session: flightSession
-            )
-            modelContext.insert(dataPoint)
+            if hasTelemetry {
+                let dataPoint = FlightDataPoint(
+                    altitudeFt: reading.altitudeFt,
+                    groundSpeedMPH: reading.groundSpeedMPH,
+                    outsideAirTempF: reading.airTempF,
+                    flightStatus: reading.flightStatus ?? "",
+                    session: flightSession
+                )
+                modelContext.insert(dataPoint)
+            }
 
             lastPollTime = Date()
 

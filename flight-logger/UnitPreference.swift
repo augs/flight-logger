@@ -75,6 +75,27 @@ enum UnitPreference: String, CaseIterable, Identifiable {
         return String(format: "%.1f°F", fahrenheit)
     }
 
+    // MARK: - Absent values
+
+    /// Rendered when a provider does not report a value at all.
+    ///
+    /// Not every airline exposes every field -- United reports no outside air
+    /// temperature, and several portals are position-only. Showing "--" says
+    /// that plainly; showing 0 would read as a real measurement.
+    static let absent = "--"
+
+    func formatAltitude(_ feet: Double?) -> String {
+        feet.map(formatAltitude) ?? Self.absent
+    }
+
+    func formatSpeed(_ mph: Double?) -> String {
+        mph.map(formatSpeed) ?? Self.absent
+    }
+
+    func formatOutsideTemp(_ fahrenheit: Double?) -> String {
+        fahrenheit.map(formatOutsideTemp) ?? Self.absent
+    }
+
     // MARK: - Chart Values
 
     /// Convert altitude for chart Y-axis.

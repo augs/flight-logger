@@ -1339,3 +1339,120 @@ struct HealthKitTests {
         #expect(FlightDetailView.summary([], unit: "%") == "—")
     }
 }
+
+// MARK: - Portal detection (B1)
+
+/// Reachability is not the same as an airline API answering.
+///
+/// The old probe returned true for any HTTP 200, so a captive portal login
+/// page -- or United's own portal before the flight begins -- would latch
+/// detection onto a config that then reported nothing for the whole flight.
+@Suite("Portal detection")
+struct PortalDetectionTests {
+
+    static let united = AirlineConfig.FieldMappings(
+        flightNumber: "flifo.flightNumber",
+        altitudeFt: "flifo.altitudeFt",
+        groundSpeedMPH: "flifo.groundSpeedMPH"
+    )
+
+    private func body(_ s: String) -> Data { Data(s.utf8) }
+
+    /// The failure that motivated the fix: 200 OK, valid JSON, no flight data.
+    @Test func portalAnnouncingItIsNotReadyIsRejected() {
+        let data = body(#"{"isPortalInitialized": false}"#)
+        #expect(AirlineAPIService.isUsableResponse(data, fields: Self.united) == false)
+    }
+
+    /// Captive portals commonly answer 200 with a login page.
+    @Test func htmlLoginPageIsRejected() {
+        let data = body("<html><body>Sign in to Wi-Fi</body></html>")
+        #expect(AirlineAPIService.isUsableResponse(data, fields: Self.united) == false)
+    }
+
+    /// Right shape, wrong provider: valid JSON whose paths do not match.
+    @Test func someOtherServicesJSONIsRejected() {
+        let data = body(#"{"status":"ok","version":"2.1"}"#)
+        #expect(AirlineAPIService.isUsableResponse(data, fields: Self.united) == false)
+    }
+
+    /// An empty body is not a 200 worth believing either.
+    @Test func emptyBodyIsRejected() {
+        #expect(AirlineAPIService.isUsableResponse(Data(), fields: Self.united) == false)
+    }
+
+    /// A real response still detects, or the fix would have broken every flight.
+    @Test func genuineFlightDataIsAccepted() {
+        let data = body(#"{"flifo":{"flightNumber":"1885","altitudeFt":"35000"}}"#)
+        #expect(AirlineAPIService.isUsableResponse(data, fields: Self.united))
+    }
+
+    /// Partial data counts. A portal that reports only a flight number is
+    /// still the right provider; demanding every field would reject it.
+    @Test func partialDataStillCountsAsDetection() {
+        let data = body(#"{"flifo":{"flightNumber":"1885"}}"#)
+        #expect(AirlineAPIService.isUsableResponse(data, fields: Self.united))
+    }
+}
+
+// MARK: - Absent telemetry (B8)
+
+/// `nil` means "the provider did not report this" and must survive all the way
+/// to export. Collapsing it to 0 produced a plausible-looking 0 °F cruise
+/// temperature and a 0 ft altitude indistinguishable from being on the ground.
+@Suite("Absent telemetry")
+struct AbsentTelemetryTests {
+
+    /// United reports no outside air temperature at all.
+    static func sessionMissingOAT() -> FlightSession {
+        let start = Date(timeIntervalSince1970: 1_757_000_000)
+        let s = FlightSession(flightNumber: "UA 1885", airline: "United",
+                              origin: "EWR", destination: "SFO",
+                              recordingStartedAt: start)
+        s.flightDataPoints = [
+            FlightDataPoint(timestamp: start, altitudeFt: 35000,
+                            groundSpeedMPH: 433, outsideAirTempF: nil,
+                            flightStatus: "In Flight")
+        ]
+        return s
+    }
+
+    @Test func csvLeavesTheColumnEmptyRatherThanZero() throws {
+        let files = SessionExport.csvFiles(for: Self.sessionMissingOAT())
+        let flight = try #require(files.first { $0.name.hasSuffix("-flightdata.csv") }).contents
+        let rows = flight.split(separator: "\n")
+        let cols = String(rows[1]).split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+
+        #expect(cols[1] == "35000")
+        #expect(cols[3].isEmpty, "absent OAT became \(cols[3])")
+    }
+
+    /// Line protocol has no null, so an omitted field is the only honest
+    /// encoding -- 0 would read as a real measurement in the database.
+    @Test func lineProtocolOmitsTheFieldEntirely() {
+        let out = SessionExport.lineProtocol(for: Self.sessionMissingOAT())
+        #expect(out.contains("altitude_ft=35000.0"))
+        #expect(!out.contains("outside_air_temp_f"))
+    }
+
+    @Test func jsonOmitsTheKeyEntirely() throws {
+        let text = SessionExport.json(for: Self.sessionMissingOAT())
+        let root = try #require(try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        let points = try #require(root["flightData"] as? [[String: Any]])
+
+        #expect(points[0]["altitudeFt"] != nil)
+        #expect(points[0]["outsideAirTempF"] == nil, "absent OAT was serialised anyway")
+    }
+
+    /// Line protocol requires at least one field per point, so a row where
+    /// nothing parsed must be skipped rather than emitted malformed.
+    @Test func pointWithNoNumericFieldsIsSkipped() {
+        let start = Date(timeIntervalSince1970: 1_757_000_000)
+        let s = FlightSession(flightNumber: "UA 1", airline: "United",
+                              recordingStartedAt: start)
+        s.flightDataPoints = [FlightDataPoint(timestamp: start, flightStatus: "Taxiing")]
+
+        let out = SessionExport.lineProtocol(for: s)
+        #expect(!out.contains("flight,"), "emitted a point with no fields")
+    }
+}

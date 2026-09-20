@@ -182,8 +182,17 @@ enum SessionExport {
         }
 
         for p in session.flightDataPoints.sorted(by: { $0.timestamp < $1.timestamp }) {
-            out += "flight,\(base) altitude_ft=\(p.altitudeFt),ground_speed_mph=\(p.groundSpeedMPH),"
-                + "outside_air_temp_f=\(p.outsideAirTempF) \(nanos(p.timestamp))\n"
+            // Omit fields the provider did not report. Line protocol has no
+            // null, so writing 0 would be indistinguishable from a real zero
+            // once it is in a time-series database.
+            var fields: [String] = []
+            if let v = p.altitudeFt { fields.append("altitude_ft=\(v)") }
+            if let v = p.groundSpeedMPH { fields.append("ground_speed_mph=\(v)") }
+            if let v = p.outsideAirTempF { fields.append("outside_air_temp_f=\(v)") }
+            // A point with no numeric fields at all cannot be written: line
+            // protocol requires at least one field per point.
+            guard !fields.isEmpty else { continue }
+            out += "flight,\(base) " + fields.joined(separator: ",") + " \(nanos(p.timestamp))\n"
         }
 
         for d in session.deviceReadings.sorted(by: { $0.timestamp < $1.timestamp }) {
@@ -276,13 +285,16 @@ enum SessionExport {
 
             root["flightData"] = session.flightDataPoints
                 .sorted { $0.timestamp < $1.timestamp }
-                .map { [
-                    "timestamp": iso.string(from: $0.timestamp),
-                    "altitudeFt": $0.altitudeFt,
-                    "groundSpeedMPH": $0.groundSpeedMPH,
-                    "outsideAirTempF": $0.outsideAirTempF,
-                    "flightStatus": $0.flightStatus,
-                ] }
+                .map { p -> [String: Any] in
+                    // Absent keys rather than zeros, matching how the device
+                    // readings above are serialised.
+                    var row: [String: Any] = ["timestamp": iso.string(from: p.timestamp)]
+                    if let v = p.altitudeFt { row["altitudeFt"] = v }
+                    if let v = p.groundSpeedMPH { row["groundSpeedMPH"] = v }
+                    if let v = p.outsideAirTempF { row["outsideAirTempF"] = v }
+                    if !p.flightStatus.isEmpty { row["flightStatus"] = p.flightStatus }
+                    return row
+                }
 
             root["deviceReadings"] = session.deviceReadings
                 .sorted { $0.timestamp < $1.timestamp }

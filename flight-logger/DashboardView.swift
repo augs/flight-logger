@@ -114,9 +114,9 @@ struct DashboardView: View {
             Label("Flight Data", systemImage: "airplane")
                 .font(.headline)
             HStack(spacing: 16) {
-                readout(label: "Altitude", value: latest.map { units.formatAltitude($0.altitudeFt) } ?? "--")
-                readout(label: "Speed", value: latest.map { units.formatSpeed($0.groundSpeedMPH) } ?? "--")
-                readout(label: "Air Temp", value: latest.map { units.formatOutsideTemp($0.outsideAirTempF) } ?? "--")
+                readout(label: "Altitude", value: units.formatAltitude(latest?.altitudeFt))
+                readout(label: "Speed", value: units.formatSpeed(latest?.groundSpeedMPH))
+                readout(label: "Air Temp", value: units.formatOutsideTemp(latest?.outsideAirTempF))
             }
             if let status = latest?.flightStatus, !status.isEmpty {
                 Text(status)
@@ -167,13 +167,15 @@ struct DashboardView: View {
                     }
                 }
 
-                if !flightData.isEmpty {
+                if flightData.contains(where: { $0.altitudeFt != nil }) {
                     miniChart(title: units.altitudeLabel, color: .blue) {
                         ForEach(flightData) { point in
-                            LineMark(
-                                x: .value("Time", point.timestamp),
-                                y: .value("Altitude", units.altitudeValue(point.altitudeFt))
-                            )
+                            if let ft = point.altitudeFt {
+                                LineMark(
+                                    x: .value("Time", point.timestamp),
+                                    y: .value("Altitude", units.altitudeValue(ft))
+                                )
+                            }
                         }
                     }
                 }

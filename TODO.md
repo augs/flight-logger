@@ -17,16 +17,22 @@ require reading the whole file.
 
 | # | Bug | Impact |
 |---|---|---|
-| B1 | Detection accepts any HTTP 200, including a portal answering `isPortalInitialized: false` with no flight data | Latches onto a portal before the flight starts and records nothing. Seen handled in `ejcx/uwc`, not by us |
+| ~~B1~~ | ~~Detection accepts any HTTP 200~~ — **fixed 2026-09-20**. `probe` now requires the body to parse as JSON *and* yield at least one mapped field (`AirlineAPIService.isUsableResponse`) | Was: latched onto a portal before the flight started and recorded nothing |
 | B2 | United/Gogo landing strings (`"arrived"`, `"landed"`, `"at gate"`) are guessed, not observed | Auto-stop may never fire for United. Falls through to the 2h inactivity backstop |
 | B3 | `ugo.json` and `boardconnect-map.json` are position-only — no landing signal at all | Those sessions can only end via the 2h backstop |
 | B4 | `panasonic.json` maps no aircraft model | Panasonic exposes `tail_number` (now stored as registration) but no model name |
 | B5 | Two `Linking to …` log lines per connect | Cosmetic. `peripheral.state` has not transitioned when the second call arrives in the same run-loop turn |
 | B6 | Battery ~8%/hour with link + keep-alive + barometer | Most of a battery over a long-haul. Measured once, from full, on a train — an upper bound. See #26 |
-| B7 | All 4 UI tests fail on macOS: `Failed to activate application (current state: Running Background)` | Deterministic, not flaky — reproduced 3/3 runs (twice via the Xcode MCP, once via plain `xcodebuild`), each test burning its 60–120s activation timeout, so a full run costs ~7 wasted minutes. The app launches but never foregrounds under the test harness. Unit tests (78) are unaffected. Suspect the Catalyst/macOS destination rather than the tests themselves — worth confirming against an iOS Simulator destination before touching the test code |
+| B7 | All 4 UI tests fail on macOS: `Failed to activate application (current state: Running Background)` | Deterministic, not flaky — reproduced 3/3 runs (twice via the Xcode MCP, once via plain `xcodebuild`), each test burning its 60–120s activation timeout, so a full run costs ~7 wasted minutes. The app launches but never foregrounds under the test harness. Unit tests (88) are unaffected. Suspect the Catalyst/macOS destination rather than the tests themselves — worth confirming against an iOS Simulator destination before touching the test code |
+| ~~B8~~ | ~~`FlightDataPoint` stored non-optional `Double`s, so `poll` coerced absent fields to `0`~~ — **found and fixed 2026-09-20** | Was: United reports no outside air temperature, so every United flight recorded **0 °F** — a plausible cruise value — and a missing altitude recorded **0 ft**, indistinguishable from on the ground. The parser carefully preserved nil and `poll` threw it away one line later. Would have poisoned any shared dataset, where OAT is the key covariate (`DATA_SHARING.md`) |
 
-None are data-corrupting; B1–B3 all fail toward *not stopping* a recording,
-which is the safe direction.
+B2–B3 fail toward *not stopping* a recording, which is the safe direction.
+
+**B8 was the exception** — it silently wrote wrong values rather than missing
+ones, which is the one failure mode that cannot be spotted after the fact.
+Worth remembering when reviewing this path: the parser was careful and the
+storage layer quietly undid it, so correctness here is a property of the whole
+chain, not of any one file.
 
 ### Where we left off — 2026-09-20
 
@@ -45,8 +51,8 @@ toggle appears, but authorization fails at runtime.
 Next candidates, unranked: #14 Live Activity · #24 motion/turbulence (opt-in)
 · #26 battery investigation (see B6) · #27 real airline captures (user has
 payloads to supply) · #29 public data sharing (design only, see
-`DATA_SHARING.md`) · B1 portal detection. Export UI has never been exercised
-on device — only in unit tests.
+`DATA_SHARING.md`) · B2/B3 landing detection. Export UI has never been
+exercised on device — only in unit tests.
 
 ### Verified on hardware
 

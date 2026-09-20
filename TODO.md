@@ -28,6 +28,26 @@ require reading the whole file.
 None are data-corrupting; B1–B3 all fail toward *not stopping* a recording,
 which is the safe direction.
 
+### Where we left off — 2026-09-20
+
+Last commits: `892c009` (HealthKit, #25) and `a56fd5a` (B7), both pushed.
+Working tree clean.
+
+**One action is owed by a human before #25 does anything on device:** open the
+project in Xcode → target `flight-logger` → Signing & Capabilities →
+**+ Capability** → HealthKit. That regenerates the provisioning profile and
+points `CODE_SIGN_ENTITLEMENTS` at `flight-logger/flight-logger.entitlements`,
+which already exists but is deliberately *not* wired into the pbxproj — wiring
+it without the profile fails the build outright (`No Accounts: Add a new
+account in Accounts settings`). Until then the code compiles and the Settings
+toggle appears, but authorization fails at runtime.
+
+Next candidates, unranked: #14 Live Activity · #24 motion/turbulence (opt-in)
+· #26 battery investigation (see B6) · #27 real airline captures (user has
+payloads to supply) · #29 public data sharing (design only, see
+`DATA_SHARING.md`) · B1 portal detection. Export UI has never been exercised
+on device — only in unit tests.
+
 ### Verified on hardware
 
 Tag link across a 68-minute locked-screen run with no suspension and three

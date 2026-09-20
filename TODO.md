@@ -655,6 +655,12 @@ Also found: Lufthansa Group FlyNet runs a *second*, camelCase API at
 `aircraftType`), distinct from BoardConnect's `/map/api/flightData`. Both exist
 in the fleet, so both are configured. Source: `southgate/inflight-wifi`.
 
+**Partly self-service since 2026-09-20.** The app now records which fields in
+a response no config read, offers to file them as a pre-filled GitHub issue
+with a redacted payload, and takes a user-supplied URL for a portal it does not
+recognise at all. So a capture no longer depends on someone remembering to grab
+one — see `PayloadInspector`, `FieldReport`, `FieldReportView`.
+
 **Still derived, not captured.** Field names come from other people's working
 code, not from responses we have seen, so they may be stale or vary by fleet.
 What is still wanted:

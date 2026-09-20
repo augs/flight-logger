@@ -17,6 +17,35 @@ struct AirlineConfig: Codable, Identifiable {
     let url: String
     let fields: FieldMappings
 
+    /// A user-supplied endpoint we know nothing about yet.
+    ///
+    /// Detection normally requires a response to parse into at least one mapped
+    /// field, which is what stops a captive portal login page from being
+    /// mistaken for an airline API. A brand-new provider fails that test by
+    /// definition -- nothing is mapped yet -- so discovery configs are exempt
+    /// and accept any valid JSON.
+    ///
+    /// The exemption is safe precisely because it is not automatic: it applies
+    /// only to a URL the user typed in Settings, so the "is this really an
+    /// airline API" judgement is theirs rather than a guess made on their
+    /// behalf. No bundled config ever sets this.
+    var isDiscovery: Bool = false
+
+    /// Omits `isDiscovery`, which is set in code rather than in JSON.
+    ///
+    /// Load-bearing, and for a reason this file already warns about further
+    /// down: Swift's synthesized `Decodable` does **not** fall back to a
+    /// property's default when the key is missing -- it throws. Adding
+    /// `isDiscovery` without this made every bundled config fail to decode, so
+    /// the app would have found no airline at all. The test suite caught it;
+    /// in the air nothing would have, beyond a flight that recorded nothing.
+    ///
+    /// Leaving a property out of `CodingKeys` is what actually makes a default
+    /// apply on decode.
+    enum CodingKeys: String, CodingKey {
+        case airline, url, fields
+    }
+
     /// Every member defaults to nil, so a config maps only what its provider
     /// offers and adding a new field here does not break existing call sites —
     /// which it did once, across every test, before the defaults existed.
@@ -150,6 +179,27 @@ enum AirlineConfigLoader {
         )
     }
 
+    /// User-set URL of an API this app has never seen.
+    static let discoveryURLKey = "discoveryAPIURL"
+
+    /// A config that fetches an unknown endpoint and maps nothing.
+    ///
+    /// Maps nothing on purpose: the point is to capture the payload so its
+    /// fields can be read off and turned into a real config. Polling it
+    /// records no data points, only the raw response and the field list.
+    static func discoveryConfig() -> AirlineConfig? {
+        let raw = UserDefaults.standard.string(forKey: discoveryURLKey) ?? ""
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, URL(string: trimmed) != nil else { return nil }
+
+        return AirlineConfig(
+            airline: "Unknown API",
+            url: trimmed,
+            fields: .init(),
+            isDiscovery: true
+        )
+    }
+
     static func loadAll() -> [AirlineConfig] {
         guard let urls = Bundle.main.urls(forResourcesWithExtension: "json", subdirectory: "AirlineConfigs") else {
             return []
@@ -174,7 +224,12 @@ enum AirlineConfigLoader {
         //
         // Test config first: when set, it is deliberately what you want probed,
         // and probing a real airline URL from the ground just wastes a timeout.
-        return [testConfig()].compactMap { $0 } + ranked(bundled)
+        // Both user-set endpoints ahead of the bundled ones: they are explicit
+        // intent, and probing six real airline URLs from the ground before
+        // reaching them just spends timeouts. Discovery last of the two, so a
+        // mock API set up for testing still wins.
+        let userSet = [testConfig(), discoveryConfig()].compactMap { $0 }
+        return userSet + ranked(bundled)
     }
 
     /// Detection order for a set of configs: richest first, ties broken by

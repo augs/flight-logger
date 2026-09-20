@@ -12,6 +12,7 @@ struct SettingsView: View {
     @AppStorage("unitPreference") private var unitPreference: UnitPreference = .system
     @AppStorage(AirlineConfigLoader.testURLKey) private var testAPIURL: String = ""
     @AppStorage(HealthKitService.enabledKey) private var healthKitEnabled: Bool = false
+    @AppStorage(AirlineConfigLoader.discoveryURLKey) private var discoveryURL: String = ""
     @State private var health = HealthKitService()
 
     var body: some View {
@@ -91,6 +92,21 @@ struct SettingsView: View {
                     Text("Test API URL")
                 } footer: {
                     Text("Probed before the bundled airline configs. Point this at Tools-MockAirlineAPI.py on your network to exercise the polling path without flying. Leave empty in normal use.")
+                }
+
+                Section {
+                    TextField("https://portal.example.com/api/flightdata", text: $discoveryURL)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption.monospaced())
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                        #endif
+                } header: {
+                    Text("Unknown airline API")
+                } footer: {
+                    Text("For an in-flight portal this app does not recognise. Unlike the configs, this accepts any JSON and maps nothing — it captures the response so its fields can be read off afterwards and turned into a real config. Find it in your browser's network inspector, or try the address the map page loads from.")
                 }
 
                 Section {

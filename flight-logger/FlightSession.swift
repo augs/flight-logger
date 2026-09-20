@@ -63,6 +63,26 @@ final class FlightSession {
     /// Stays on device like everything else; exported only if the user asks.
     var rawFirstResponse: String = ""
 
+    /// Paths in the first response that no config read, one per line as
+    /// `path\ttype`.
+    ///
+    /// Stored rather than recomputed because the payload it describes may be
+    /// the only one anyone ever captures from that fleet, and because the
+    /// config can change underneath it -- this records what was unknown *at
+    /// the time of the flight*.
+    var unmappedFieldPaths: String = ""
+
+    /// Unmapped fields, parsed back into structured form.
+    var unmappedFields: [PayloadInspector.Leaf] {
+        unmappedFieldPaths
+            .split(separator: "\n")
+            .compactMap { line in
+                let parts = line.split(separator: "\t", maxSplits: 1)
+                guard parts.count == 2 else { return nil }
+                return PayloadInspector.Leaf(path: String(parts[0]), type: String(parts[1]))
+            }
+    }
+
     @Relationship(deleteRule: .cascade, inverse: \SensorReading.session)
     var sensorReadings: [SensorReading] = []
 

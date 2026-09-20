@@ -1546,3 +1546,253 @@ struct DetectionOrderTests {
         #expect(AirlineConfigLoader.ranked([b, a]).map(\.airline) == ["Alpha", "Zebra"])
     }
 }
+
+// MARK: - Payload inspection and field reporting
+
+/// Discovering unmapped fields, and redacting a payload well enough to attach
+/// to a public issue.
+@Suite("Payload inspection")
+struct PayloadInspectorTests {
+
+    static func json(_ s: String) throws -> [String: Any] {
+        try #require(try JSONSerialization.jsonObject(with: Data(s.utf8)) as? [String: Any])
+    }
+
+    static let unitedFields = AirlineConfig.FieldMappings(
+        flightNumber: "flifo.flightNumber",
+        altitudeFt: "flifo.altitudeFt"
+    )
+
+    @Test func flattensNestedPathsInConfigSyntax() throws {
+        let leaves = PayloadInspector.leaves(try Self.json(
+            #"{"flifo":{"altitudeFt":35000,"nested":{"deep":"x"}}}"#))
+        #expect(leaves.map(\.path).contains("flifo.altitudeFt"))
+        #expect(leaves.map(\.path).contains("flifo.nested.deep"))
+    }
+
+    /// A path reported must be usable verbatim in a config, arrays included.
+    @Test func arrayPathsMatchTheResolver() throws {
+        let payload = try Self.json(#"{"legs":[{"altitude":35000}]}"#)
+        let path = try #require(PayloadInspector.leaves(payload).first?.path)
+        #expect(path == "legs.0.altitude")
+
+        let fields = AirlineConfig.FieldMappings(altitudeFt: path)
+        #expect(AirlineResponseParser.parse(json: payload, fields: fields).altitudeFt == 35000)
+    }
+
+    /// Only the first element: a fifty-leg array would bury the new field.
+    @Test func onlyTheFirstArrayElementIsReported() throws {
+        let leaves = PayloadInspector.leaves(try Self.json(
+            #"{"legs":[{"a":1},{"a":2},{"a":3}]}"#))
+        #expect(leaves.count == 1)
+    }
+
+    @Test func distinguishesBooleansFromNumbers() throws {
+        let leaves = PayloadInspector.leaves(try Self.json(
+            #"{"onGround":true,"altitude":35000}"#))
+        let types = Dictionary(uniqueKeysWithValues: leaves.map { ($0.path, $0.type) })
+        #expect(types["onGround"] == "boolean")
+        #expect(types["altitude"] == "number")
+    }
+
+    /// A null may carry a value on another fleet or later in the flight.
+    @Test func nullsAreReportedNotDropped() throws {
+        let leaves = PayloadInspector.leaves(try Self.json(#"{"airTemp":null}"#))
+        #expect(leaves.first?.type == "null")
+    }
+
+    @Test func mappedFieldsAreNotReportedAsUnknown() throws {
+        let payload = try Self.json(
+            #"{"flifo":{"flightNumber":"1885","altitudeFt":35000,"windDirection":270}}"#)
+        let unmapped = PayloadInspector.unmapped(json: payload, fields: Self.unitedFields)
+
+        #expect(unmapped.map(\.path) == ["flifo.windDirection"])
+    }
+
+    /// Portal plumbing is both useless and the most identifying part of a
+    /// payload, so it never reaches a draft report at all.
+    @Test func portalNoiseIsExcluded() throws {
+        let payload = try Self.json("""
+        {"sessionId":"abc","macAddress":"aa:bb","advertBanner":"x","windDirection":270}
+        """)
+        let unmapped = PayloadInspector.unmapped(json: payload, fields: .init())
+        #expect(unmapped.map(\.path) == ["windDirection"])
+    }
+}
+
+@Suite("Payload redaction")
+struct PayloadRedactionTests {
+
+    static func redact(_ s: String) throws -> String {
+        let json = try #require(
+            try JSONSerialization.jsonObject(with: Data(s.utf8)) as? [String: Any])
+        return PayloadInspector.redactedJSONText(json)
+    }
+
+    /// The point of the whole feature: keys and types survive, so a reader can
+    /// still write a config from the report.
+    @Test func structureAndKeysSurvive() throws {
+        let out = try Self.redact(#"{"flifo":{"windDirection":270,"flightPhase":"cruise"}}"#)
+        #expect(out.contains("flifo"))
+        #expect(out.contains("windDirection"))
+        #expect(out.contains("flightPhase"))
+    }
+
+    /// Identifying values must not reach a public issue tracker.
+    @Test func identifyingValuesAreReplaced() throws {
+        let out = try Self.redact("""
+        {"flightNumber":"LH441","tailNumber":"D-AIGX","departureGate":"C14","seat":"32A"}
+        """)
+        #expect(!out.contains("LH441"))
+        #expect(!out.contains("D-AIGX"))
+        #expect(!out.contains("C14"))
+        #expect(!out.contains("32A"))
+        #expect(out.contains("redacted"))
+    }
+
+    /// Numbers are how you tell feet from metres, which has already caused one
+    /// class of bug here, so they are kept.
+    @Test func plainNumbersAreKept() throws {
+        let out = try Self.redact(#"{"altitude":35000,"groundSpeed":512}"#)
+        #expect(out.contains("35000"))
+        #expect(out.contains("512"))
+    }
+
+    /// Except coordinates, which locate the reporter.
+    @Test func coordinatesAreRedactedDespiteBeingNumbers() throws {
+        let out = try Self.redact(#"{"latitude":51.4706,"longitude":-0.4619}"#)
+        #expect(!out.contains("51.47"))
+        #expect(!out.contains("0.46"))
+    }
+
+    /// Short strings are enum-like status values and are what make a field
+    /// mappable; long ones are free text and are not.
+    @Test func shortStatusStringsSurviveLongOnesDoNot() throws {
+        let long = String(repeating: "x", count: 200)
+        let out = try Self.redact(#"{"flightPhase":"cruise","notice":"\#(long)"}"#)
+        #expect(out.contains("cruise"))
+        #expect(!out.contains(long))
+        #expect(out.contains("200 chars"))
+    }
+
+    @Test func booleansSurviveEvenOnIdentifyingKeys() throws {
+        let out = try Self.redact(#"{"weightOnWheels":false}"#)
+        #expect(out.contains("false"))
+    }
+
+    /// Redaction must not produce something JSONSerialization chokes on.
+    @Test func outputIsStillValidJSON() throws {
+        let out = try Self.redact("""
+        {"flifo":{"flightNumber":"LH441","altitudeFt":35000,"legs":[{"lat":1.0}]}}
+        """)
+        #expect((try? JSONSerialization.jsonObject(with: Data(out.utf8))) != nil)
+    }
+}
+
+@Suite("Field report")
+struct FieldReportTests {
+
+    static let payload: [String: Any] = ["flifo": ["flightNumber": "LH441", "windDirection": 270]]
+
+    @Test func bodyListsUnmappedPathsAndCarriesRedactedPayload() {
+        let draft = FieldReport.draft(
+            provider: "Lufthansa FlyNet",
+            endpoint: "https://www.lufthansa-flynet.com/fapi/flightData",
+            unmapped: [.init(path: "flifo.windDirection", type: "number")],
+            payload: Self.payload,
+            appVersion: "1.0 (1)"
+        )
+
+        #expect(draft.title.contains("Lufthansa FlyNet"))
+        #expect(draft.body.contains("flifo.windDirection"))
+        #expect(draft.body.contains("lufthansa-flynet.com"))
+        #expect(!draft.body.contains("LH441"), "identifying value reached the report body")
+    }
+
+    @Test func issueURLCarriesTitleAndBody() throws {
+        let draft = FieldReport.draft(
+            provider: "United", endpoint: "https://example.com",
+            unmapped: [], payload: [:], appVersion: "1.0 (1)")
+        let url = try #require(FieldReport.issueURL(for: draft))
+
+        #expect(url.absoluteString.hasPrefix("https://github.com/\(FieldReport.repository)/issues/new"))
+        let items = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        #expect(items.contains { $0.name == "title" })
+        #expect(items.contains { $0.name == "body" })
+    }
+
+    /// A huge payload must fall back to copy rather than build a URL GitHub
+    /// will reject at the last step.
+    @Test func oversizedBodyIsFlaggedRatherThanTruncated() {
+        let big = (0..<2000).map { ("field\($0)", $0) }
+        let draft = FieldReport.draft(
+            provider: "X", endpoint: "y", unmapped: [],
+            payload: Dictionary(uniqueKeysWithValues: big), appVersion: "1.0 (1)")
+
+        #expect(draft.fitsInURL == false)
+    }
+}
+
+@Suite("Discovery endpoint")
+struct DiscoveryEndpointTests {
+
+    /// The B1 fix requires a mapped field before believing a response, which a
+    /// brand-new provider cannot satisfy by definition. Without the exemption
+    /// this feature could not work at all.
+    @Test func discoveryAcceptsJSONThatMapsNothing() {
+        let body = Data(#"{"someUnknownShape":{"x":1}}"#.utf8)
+
+        #expect(AirlineAPIService.isUsableResponse(body, fields: .init()) == false)
+        #expect(AirlineAPIService.isUsableResponse(body, fields: .init(), isDiscovery: true))
+    }
+
+    /// Still not a blank cheque: a captive portal login page is rejected in
+    /// discovery mode too.
+    @Test func discoveryStillRejectsNonJSON() {
+        let html = Data("<html><body>Sign in</body></html>".utf8)
+        #expect(AirlineAPIService.isUsableResponse(html, fields: .init(), isDiscovery: true) == false)
+    }
+
+    @Test func discoveryRejectsAnEmptyObject() {
+        let empty = Data("{}".utf8)
+        #expect(AirlineAPIService.isUsableResponse(empty, fields: .init(), isDiscovery: true) == false)
+    }
+
+    /// No bundled config may set the flag, or detection would accept anything.
+    @Test func noBundledConfigIsADiscoveryConfig() throws {
+        let directory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "flight-logger/AirlineConfigs")
+        let configs = try FileManager.default
+            .contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
+            .map { try JSONDecoder().decode(AirlineConfig.self, from: Data(contentsOf: $0)) }
+
+        #expect(configs.allSatisfy { !$0.isDiscovery })
+    }
+}
+
+/// Regression guard for a trap this project has now hit twice: adding a
+/// property to `AirlineConfig` makes its key *required* by the synthesized
+/// decoder unless it is left out of `CodingKeys`. The failure is silent in the
+/// worst way -- every airline config stops decoding, so the app finds no
+/// provider and a flight records nothing, with no error anywhere.
+@Suite("Config Codable synthesis")
+struct ConfigCodableSynthesisTests {
+
+    @Test func configDecodesWithoutInCodeOnlyProperties() throws {
+        let json = #"{"airline":"X","url":"https://x","fields":{"altitudeFt":"a"}}"#
+        let config = try JSONDecoder().decode(AirlineConfig.self, from: Data(json.utf8))
+
+        #expect(config.airline == "X")
+        #expect(config.isDiscovery == false, "default did not apply on decode")
+    }
+
+    /// A config file cannot grant itself the detection exemption.
+    @Test func isDiscoveryCannotBeSetFromJSON() throws {
+        let json = #"{"airline":"X","url":"https://x","fields":{},"isDiscovery":true}"#
+        let config = try JSONDecoder().decode(AirlineConfig.self, from: Data(json.utf8))
+
+        #expect(config.isDiscovery == false, "JSON granted itself discovery mode")
+    }
+}

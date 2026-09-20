@@ -10,6 +10,12 @@ where it came from, and anything marked ⚠️ is inferred rather than observed.
 When a real capture is made, save it to `flight-loggerTests/Fixtures/` and
 update the section from the capture, not from this file.
 
+**The app now helps with this.** It records which fields in a response no
+config read, and the flight detail screen offers to turn that into a
+pre-filled GitHub issue with a redacted copy of the payload. Settings also
+takes a URL for a portal the app does not recognise at all, which accepts any
+JSON and maps nothing — see `PayloadInspector` and `FieldReport`.
+
 Legend: **bold** = mapped by our config today · *italic* = time-series (changes
 during flight) · plain = static metadata, captured once.
 

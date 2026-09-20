@@ -60,9 +60,44 @@
 - Found while assessing how well an upcoming Lufthansa A340 flight would fare,
   which is a good argument for asking that question of a route before flying it
 
+### The app can now report fields it does not recognise
+- Every config here is derived from other people's clients rather than a real
+  capture, so an unknown field is the expected case, not an error. The app now
+  diffs each first response against what its config reads and records the
+  paths it did not recognise
+- The flight detail screen offers to turn that into a pre-filled GitHub issue.
+  Nothing is sent from the app: it opens GitHub with the text filled in, and
+  the user submits it there — the same no-backend reasoning `DATA_SHARING.md`
+  reaches for contributions, and more important here because an issue tracker
+  is public and permanent
+- **The payload is redacted by default, not by setting.** Keys, structure and
+  types survive, because that is what a field mapping is built from. Numbers
+  are kept so feet can be told from metres — an ambiguity that has already
+  caused a class of bug here — except coordinates. Flight number, tail number,
+  gate and seat are replaced with their type. Session identifiers, MAC and IP
+  are dropped before redaction rather than relying on it
+- Settings takes a URL for a portal the app has never seen, which accepts any
+  JSON and maps nothing. This needed an explicit exemption from the B1 check,
+  since a brand-new provider cannot satisfy "parses into a mapped field" by
+  definition. The exemption is safe because it applies only to a URL the user
+  typed, never to automatic detection — and a bundled config cannot grant
+  itself the flag
+
+### A near-miss worth recording
+- Adding `isDiscovery` to `AirlineConfig` silently broke **every** bundled
+  config. Swift's synthesized `Decodable` does not fall back to a property's
+  default when the key is absent; it throws. The app would have detected no
+  airline at all and recorded nothing, with no error surfaced anywhere
+- Caught by the existing config tests within a minute. Fixed by leaving the
+  property out of `CodingKeys`, with a regression guard that also checks a
+  config file cannot grant itself the detection exemption
+- This is the second time this exact trap has been hit in this file — the
+  first was `let x: String? = nil` — which is why both now carry warnings
+
 ### Test and tooling notes
-- Unit tests 78 → 94. New coverage for portal detection, absent telemetry
-  surviving all three export formats, and config ranking
+- Unit tests 78 → 116. New coverage for portal detection, absent telemetry
+  across all three export formats, config ranking, payload inspection,
+  redaction, report building, discovery mode and Codable synthesis
 - **B7 recorded**: all 4 macOS UI tests fail to foreground the app under the
   harness (`current state: Running Background`), deterministically — 3 runs out
   of 3, two via the Xcode MCP and one via plain `xcodebuild`. Each burns its

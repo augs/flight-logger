@@ -25,11 +25,13 @@ struct FlightDetailView: View {
     @State private var exportError: String?
     @State private var health = HealthKitService()
     @State private var healthMerged: Int?
+    @State private var showingFieldReport = false
 
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
                 metadataSection
+                unmappedFieldsCard
                 if !session.sensorReadings.isEmpty || !session.flightDataPoints.isEmpty
                     || !session.deviceReadings.isEmpty {
                     chartSection
@@ -80,6 +82,44 @@ struct FlightDetailView: View {
     }
 
     // MARK: - Metadata
+
+    /// Offers to report fields the app did not recognise.
+    ///
+    /// Shown rather than popped as a dialog: this is never urgent, and a modal
+    /// interrupting someone mid-flight to ask about JSON would be the wrong
+    /// trade. It waits on the flight detail screen until they are interested.
+    @ViewBuilder
+    private var unmappedFieldsCard: some View {
+        if !session.unmappedFields.isEmpty {
+            Button {
+                showingFieldReport = true
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "questionmark.square.dashed")
+                        .font(.title2)
+                        .foregroundStyle(.tint)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("^[\(session.unmappedFields.count) unrecognised field](inflect: true)")
+                            .font(.subheadline.weight(.medium))
+                        Text("This response had fields the app does not map. Reporting them helps every future flight on this fleet.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.leading)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding()
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
+            }
+            .buttonStyle(.plain)
+            .sheet(isPresented: $showingFieldReport) {
+                FieldReportView(session: session)
+            }
+        }
+    }
 
     private var metadataSection: some View {
         VStack(alignment: .leading, spacing: 12) {

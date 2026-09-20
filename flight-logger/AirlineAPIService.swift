@@ -188,7 +188,7 @@ final class AirlineAPIService {
             let (data, response) = try await session.data(from: url)
             guard let http = response as? HTTPURLResponse,
                   (200...299).contains(http.statusCode) else { return false }
-            return Self.isUsableResponse(data, fields: config.fields)
+            return Self.isUsableResponse(data, fields: config.fields, isDiscovery: config.isDiscovery)
         } catch {
             return false
         }
@@ -198,10 +198,21 @@ final class AirlineAPIService {
     ///
     /// Separated from the network call so it can be tested against recorded
     /// bodies -- including the ones that caused this bug -- without a flight.
-    static func isUsableResponse(_ data: Data, fields: AirlineConfig.FieldMappings) -> Bool {
+    static func isUsableResponse(
+        _ data: Data,
+        fields: AirlineConfig.FieldMappings,
+        isDiscovery: Bool = false
+    ) -> Bool {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return false   // an HTML login page is not an airline API
         }
+        // A discovery endpoint maps nothing yet, so requiring a mapped field
+        // would reject every new provider -- the exact case it exists to
+        // capture. Valid JSON with something in it is the most that can be
+        // asked of an API nobody has described. Still not a blank cheque: an
+        // HTML page or an empty object is rejected as before.
+        if isDiscovery { return !json.isEmpty }
+
         return !AirlineResponseParser.parse(json: json, fields: fields).isEmpty
     }
 
@@ -255,6 +266,19 @@ final class AirlineAPIService {
                 // otherwise lost the moment the flight lands, and this turns a
                 // real flight into a fixture for the parser tests.
                 flightSession.rawFirstResponse = String(data: data, encoding: .utf8) ?? ""
+
+                // What we did not recognise, recorded while the response is in
+                // hand. Every config is derived from third-party clients rather
+                // than a real capture, so a field appearing here is the normal
+                // case, not an error -- see AIRLINE_APIS.md.
+                let unmapped = PayloadInspector.unmapped(json: json, fields: config.fields)
+                flightSession.unmappedFieldPaths = unmapped
+                    .map { "\($0.path)\t\($0.type)" }
+                    .joined(separator: "\n")
+                if !unmapped.isEmpty {
+                    logger.info("\(unmapped.count) unmapped field(s) in \(config.airline, privacy: .public) response")
+                }
+
                 hasPopulatedMetadata = true
             }
 
